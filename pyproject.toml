@@ -1,0 +1,33 @@
+[tool.poetry]
+name = "gg-fin-backend"
+version = "0.1.0"
+description = "GG Finance Backend API"
+authors = ["GG Finance Team"]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.115.0"
+uvicorn = {extras = ["standard"], version = "^0.32.0"}
+gunicorn = "^23.0.0"
+sqlmodel = "^0.0.22"
+psycopg2-binary = "^2.9.10"
+alembic = "^1.14.0"
+pydantic = {extras = ["email"], version = "^2.10.0"}
+pydantic-settings = "^2.6.0"
+passlib = {extras = ["bcrypt"], version = "^1.7.4"}
+bcrypt = ">=3.2.0,<4.0.0"
+python-jose = {extras = ["cryptography"], version = "^3.3.0"}
+python-multipart = "^0.0.20"
+faster-whisper = "^1.1.0"
+rapidfuzz = "^3.10.0"
+pandas = "^2.2.0"
+openpyxl = "^3.1.5"
+python-dotenv = "^1.0.1"
+
+[tool.poetry.dev-dependencies]
+pytest = "^8.0.0"
+httpx = "^0.28.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

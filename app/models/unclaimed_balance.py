@@ -1,0 +1,17 @@
+import datetime
+from decimal import Decimal
+from typing import Optional
+
+from sqlmodel import Field, SQLModel
+
+
+class UnclaimedBalance(SQLModel, table=True):
+    __tablename__ = "tbl_unclaimed_balance"
+
+    id: int | None = Field(default=None, primary_key=True)
+    date: datetime.date = Field(index=True)
+    product: str  # "edi" or "iop"
+    customer_id: int
+    customer_name: str
+    amount: Decimal = Field(decimal_places=2, max_digits=12)
+    notes: Optional[str] = None
