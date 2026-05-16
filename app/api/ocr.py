@@ -30,6 +30,21 @@ async def upload_pdf(
     return {"session_id": session_id, "total_pages": total_pages}
 
 
+@router.get("/page/{session_id}/{page_index}")
+async def get_page_image(
+    session_id: str,
+    page_index: int,
+    _=Depends(get_current_user),
+):
+    try:
+        page_b64 = await run_in_threadpool(ocr_service.get_page_image_b64, session_id, page_index)
+    except FileNotFoundError:
+        raise HTTPException(404, "OCR session not found or expired — please re-upload the PDF")
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to render page: {exc}")
+    return {"page_image_b64": page_b64}
+
+
 class ExtractRequest(BaseModel):
     session_id: str
     page_index: int
