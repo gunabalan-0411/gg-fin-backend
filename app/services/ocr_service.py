@@ -7,7 +7,6 @@ import uuid
 from pathlib import Path
 
 import fitz  # PyMuPDF
-import google.generativeai as genai
 from rapidfuzz import fuzz, process
 
 TEMP_DIR = Path(tempfile.gettempdir()) / "ocr_sessions"
@@ -47,14 +46,6 @@ Each element must have exactly these fields:
 {"collection_date":"DD-MM-YYYY","customer_name":"transliterated name","product_type":"EDI","payment_mode":"CASH","online_marker":null,"amount":2000,"raw_text":"original line","confidence_score":0.95,"page_number":1,"notes":""}"""
 
 
-def _model() -> genai.GenerativeModel:
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY environment variable is not set")
-    genai.configure(api_key=api_key)
-    return genai.GenerativeModel("gemini-2.0-flash")
-
-
 def save_pdf(file_bytes: bytes) -> tuple[str, int]:
     session_id = str(uuid.uuid4())
     pdf_path = TEMP_DIR / f"{session_id}.pdf"
@@ -77,13 +68,25 @@ def get_page_image_b64(session_id: str, page_index: int) -> str:
 
 
 def extract_page(session_id: str, page_index: int) -> tuple[str, list[dict]]:
+    from google import genai
+    from google.genai import types
+
     page_b64 = get_page_image_b64(session_id, page_index)
-    model = _model()
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY environment variable is not set")
+
+    client = genai.Client(api_key=api_key)
     img_data = base64.b64decode(page_b64)
-    response = model.generate_content([
-        EXTRACTION_PROMPT,
-        {"mime_type": "image/png", "data": img_data},
-    ])
+
+    response = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=[
+            EXTRACTION_PROMPT,
+            types.Part.from_bytes(data=img_data, mime_type="image/png"),
+        ],
+    )
     text = response.text.strip()
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```\s*$", "", text)
