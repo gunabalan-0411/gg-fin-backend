@@ -5,7 +5,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, backup, customers, dashboard, dataset, debts, defaulted_balances, drive, expenses, namemap, ocr, setup, transactions, unclaimed_balances, voice, upi
+from app.api import auth, backup, customers, dashboard, dataset, debts, defaulted_balances, drive, expenses, namemap, setup, transactions, unclaimed_balances, voice, upi
 from app.core.database import init_db
 from app.core.config import settings
 
@@ -63,7 +63,11 @@ app.include_router(transactions.router, prefix="/api/transactions", tags=["trans
 app.include_router(expenses.router, prefix="/api/expenses", tags=["expenses"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(voice.router, prefix="/api/voice", tags=["voice"])
-app.include_router(ocr.router, prefix="/api/ocr", tags=["ocr"])
+try:
+    from app.api import ocr
+    app.include_router(ocr.router, prefix="/api/ocr", tags=["ocr"])
+except Exception as _ocr_err:
+    logging.getLogger(__name__).warning("OCR router disabled — missing dependency: %s", _ocr_err)
 app.include_router(backup.router, prefix="/api/backup", tags=["backup"])
 app.include_router(namemap.router, prefix="/api/namemap", tags=["namemap"])
 app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])

@@ -6,7 +6,6 @@ import tempfile
 import uuid
 from pathlib import Path
 
-import fitz  # PyMuPDF
 from rapidfuzz import fuzz, process
 
 TEMP_DIR = Path(tempfile.gettempdir()) / "ocr_sessions"
@@ -47,6 +46,7 @@ Each element must have exactly these fields:
 
 
 def save_pdf(file_bytes: bytes) -> tuple[str, int]:
+    import fitz  # lazy — keeps startup safe if PyMuPDF install is broken
     session_id = str(uuid.uuid4())
     pdf_path = TEMP_DIR / f"{session_id}.pdf"
     pdf_path.write_bytes(file_bytes)
@@ -56,6 +56,7 @@ def save_pdf(file_bytes: bytes) -> tuple[str, int]:
 
 
 def get_page_image_b64(session_id: str, page_index: int) -> str:
+    import fitz
     pdf_path = TEMP_DIR / f"{session_id}.pdf"
     if not pdf_path.exists():
         raise FileNotFoundError(f"Session {session_id} not found or expired")
