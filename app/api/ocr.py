@@ -4,11 +4,12 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from app.api.deps import get_current_user
 from app.core.database import get_session
 from app.models.customer import EdiCustomer, IopCustomer
+from app.models.mapping import EdiNameMap, IopNameMap
 from app.services import ocr_service
 from app.services.transaction_service import EdiTransactionService, IopTransactionService
 
@@ -57,10 +58,31 @@ async def extract_page(
     session: Session = Depends(get_session),
     _=Depends(get_current_user),
 ):
-    edi_rows = session.exec(select(EdiCustomer)).all()
-    iop_rows = session.exec(select(IopCustomer)).all()
-    edi_list = [{"id": c.customer_id, "name": c.customer_name} for c in edi_rows if c.customer_name]
-    iop_list = [{"id": c.customer_id, "name": c.customer_name} for c in iop_rows if c.customer_name]
+    # EDI: only customers with outstanding_balance > 0, using English name map
+    edi_active = {
+        c.customer_id
+        for c in session.exec(
+            select(EdiCustomer).where(col(EdiCustomer.outstanding_balance) > 0)
+        ).all()
+    }
+    edi_list = [
+        {"id": r.customer_id, "name": r.customer_name_en}
+        for r in session.exec(select(EdiNameMap)).all()
+        if r.customer_id in edi_active and r.customer_name_en
+    ]
+
+    # IOP: only customers with loan_closure > 0, using English name map
+    iop_active = {
+        c.customer_id
+        for c in session.exec(
+            select(IopCustomer).where(col(IopCustomer.loan_closure) > 0)
+        ).all()
+    }
+    iop_list = [
+        {"id": r.customer_id, "name": r.customer_name_en}
+        for r in session.exec(select(IopNameMap)).all()
+        if r.customer_id in iop_active and r.customer_name_en
+    ]
 
     try:
         page_b64, records = await run_in_threadpool(
