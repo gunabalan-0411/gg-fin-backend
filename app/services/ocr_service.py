@@ -68,7 +68,7 @@ def get_page_image_b64(session_id: str, page_index: int) -> str:
     return base64.b64encode(img_bytes).decode()
 
 
-def extract_page(session_id: str, page_index: int) -> tuple[str, list[dict]]:
+def extract_page(session_id: str, page_index: int, model: str = "gemini-2.5-flash") -> tuple[str, list[dict]]:
     from google import genai
     from google.genai import types
 
@@ -82,7 +82,7 @@ def extract_page(session_id: str, page_index: int) -> tuple[str, list[dict]]:
     img_data = base64.b64decode(page_b64)
 
     response = client.models.generate_content(
-        model="gemini-2.0-flash",
+        model=model,
         contents=[
             EXTRACTION_PROMPT,
             types.Part.from_bytes(data=img_data, mime_type="image/png"),

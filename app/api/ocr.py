@@ -48,6 +48,7 @@ async def get_page_image(
 class ExtractRequest(BaseModel):
     session_id: str
     page_index: int
+    model: str = "gemini-2.5-flash"
 
 
 @router.post("/extract")
@@ -63,7 +64,7 @@ async def extract_page(
 
     try:
         page_b64, records = await run_in_threadpool(
-            ocr_service.extract_page, body.session_id, body.page_index
+            ocr_service.extract_page, body.session_id, body.page_index, body.model
         )
     except FileNotFoundError:
         raise HTTPException(404, "OCR session not found or expired — please re-upload the PDF")
