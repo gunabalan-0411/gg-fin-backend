@@ -1,15 +1,39 @@
+"""
+OCR service — PDF session management, page preprocessing, and Gemini extraction.
+
+Pipeline per page:
+    PDF → OCRPreprocessor (resize + grayscale + CLAHE + denoise + sharpen → JPEG)
+        → cached on disk per session → Gemini Vision API
+
+Preprocessing is done on-demand and cached, so the first `get_page_image_b64`
+call for a page runs the preprocessor and writes a JPEG; subsequent calls
+(including `extract_page`) read from the cache instantly.
+
+Graceful degradation: if OpenCV / the preprocessor package is unavailable, the
+service falls back to PyMuPDF's raw PNG rendering so the rest of the app keeps
+working.
+"""
+
+from __future__ import annotations
+
 import base64
 import json
+import logging
 import os
 import re
 import tempfile
 import uuid
 from pathlib import Path
+from typing import Optional
 
 from rapidfuzz import fuzz, process
 
+log = logging.getLogger(__name__)
+
 TEMP_DIR = Path(tempfile.gettempdir()) / "ocr_sessions"
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
+# ── Extraction prompt ──────────────────────────────────────────────────────────
 
 EXTRACTION_PROMPT = """You are a specialized Tamil handwritten finance document extractor.
 
@@ -44,48 +68,117 @@ OUTPUT: Return ONLY a valid JSON array with no markdown fences, no explanation.
 Each element must have exactly these fields:
 {"collection_date":"DD-MM-YYYY","customer_name":"transliterated name","product_type":"EDI","payment_mode":"CASH","online_marker":null,"amount":2000,"raw_text":"original line","confidence_score":0.95,"page_number":1,"notes":""}"""
 
+# ── Preprocessor singleton ─────────────────────────────────────────────────────
+
+_preprocessor: Optional[object] = None
+_preprocessor_available: Optional[bool] = None  # None = not yet checked
+
+
+def _get_preprocessor():
+    """
+    Return a lazily-initialised OCRPreprocessor tuned for Tamil finance documents,
+    or None if OpenCV / the preprocessor package is not installed.
+    """
+    global _preprocessor, _preprocessor_available
+
+    if _preprocessor_available is False:
+        return None
+    if _preprocessor is not None:
+        return _preprocessor
+
+    try:
+        from app.ocr_preprocessor import OCRPreprocessor, PreprocessingConfig
+
+        # Tuned for Tamil handwriting on financial record pages:
+        #   - 160 DPI: Tamil character loops need slightly more detail than Latin
+        #   - 1800 px max: keeps tile count low while preserving fine strokes
+        #   - CLAHE clip 2.5: recovers faded ink on older paper
+        #   - bilateral sigma 18: sharp ink edges, smooth paper grain
+        #   - unsharp 0.45: crispens Tamil conjunct strokes and numeral serifs
+        #   - JPEG 87: safer for closed-loop Tamil characters (ந, ல, ர, ழ…)
+        config = PreprocessingConfig(
+            render_dpi=160,
+            max_long_side=1800,
+            jpeg_quality=87,
+            clahe_clip_limit=2.5,
+            bilateral_sigma_color=18.0,
+            bilateral_sigma_space=18.0,
+            unsharp_strength=0.45,
+            use_parallel_processing=False,  # single-page on-demand calls don't benefit
+        )
+        _preprocessor = OCRPreprocessor(config)
+        _preprocessor_available = True
+        log.info("OCR preprocessor initialised (OpenCV pipeline active)")
+    except Exception as exc:
+        _preprocessor_available = False
+        log.warning("OCR preprocessor unavailable — falling back to raw PNG: %s", exc)
+
+    return _preprocessor
+
+
+# ── Session helpers ────────────────────────────────────────────────────────────
+
+def _session_dir(session_id: str) -> Path:
+    return TEMP_DIR / session_id
+
+
+def _pdf_path(session_id: str) -> Path:
+    return _session_dir(session_id) / "source.pdf"
+
+
+def _cached_page_path(session_id: str, page_index: int) -> Path:
+    return _session_dir(session_id) / f"page_{page_index:04d}.jpg"
+
+
+# ── Public API ─────────────────────────────────────────────────────────────────
 
 def save_pdf(file_bytes: bytes) -> tuple[str, int]:
-    import fitz  # lazy — keeps startup safe if PyMuPDF install is broken
+    """Save uploaded PDF bytes and return (session_id, total_pages)."""
+    import fitz
+
     session_id = str(uuid.uuid4())
-    pdf_path = TEMP_DIR / f"{session_id}.pdf"
-    pdf_path.write_bytes(file_bytes)
-    with fitz.open(str(pdf_path)) as doc:
+    sdir = _session_dir(session_id)
+    sdir.mkdir(parents=True, exist_ok=True)
+    pdf = _pdf_path(session_id)
+    pdf.write_bytes(file_bytes)
+    with fitz.open(str(pdf)) as doc:
         total_pages = doc.page_count
     return session_id, total_pages
 
 
 def get_page_image_b64(session_id: str, page_index: int) -> str:
-    import fitz
-    pdf_path = TEMP_DIR / f"{session_id}.pdf"
-    if not pdf_path.exists():
-        raise FileNotFoundError(f"Session {session_id} not found or expired")
-    with fitz.open(str(pdf_path)) as doc:
-        page = doc[page_index]
-        mat = fitz.Matrix(2.0, 2.0)  # 2× zoom for sharper OCR
-        pix = page.get_pixmap(matrix=mat)
-        img_bytes = pix.tobytes("png")
+    """
+    Return base64-encoded image for display.
+    Uses the preprocessed JPEG if available (preferred), raw PNG as fallback.
+    """
+    img_bytes, _ = _get_page_bytes(session_id, page_index)
     return base64.b64encode(img_bytes).decode()
 
 
-def extract_page(session_id: str, page_index: int, model: str = "gemini-2.5-flash") -> tuple[str, list[dict]]:
+def extract_page(
+    session_id: str, page_index: int, model: str = "gemini-2.5-flash"
+) -> tuple[str, list[dict]]:
+    """
+    Preprocess the requested page and run Gemini vision extraction.
+    Returns (page_b64_for_display, list_of_extracted_records).
+    """
     from google import genai
     from google.genai import types
 
-    page_b64 = get_page_image_b64(session_id, page_index)
+    img_bytes, mime_type = _get_page_bytes(session_id, page_index)
+    page_b64 = base64.b64encode(img_bytes).decode()
 
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise ValueError("GEMINI_API_KEY environment variable is not set")
 
     client = genai.Client(api_key=api_key)
-    img_data = base64.b64decode(page_b64)
 
     response = client.models.generate_content(
         model=model,
         contents=[
             EXTRACTION_PROMPT,
-            types.Part.from_bytes(data=img_data, mime_type="image/png"),
+            types.Part.from_bytes(data=img_bytes, mime_type=mime_type),
         ],
     )
     text = response.text.strip()
@@ -96,6 +189,7 @@ def extract_page(session_id: str, page_index: int, model: str = "gemini-2.5-flas
 
 
 def fuzzy_match(name: str, customers: list[dict], limit: int = 3) -> list[dict]:
+    """Return top `limit` fuzzy matches from a {id, name} list."""
     if not customers or not name:
         return []
     names = [c["name"] for c in customers]
@@ -104,3 +198,84 @@ def fuzzy_match(name: str, customers: list[dict], limit: int = 3) -> list[dict]:
         {"id": customers[idx]["id"], "name": matched_name, "score": round(score / 100, 2)}
         for matched_name, score, idx in matches
     ]
+
+
+# ── Internal helpers ───────────────────────────────────────────────────────────
+
+def _get_page_bytes(session_id: str, page_index: int) -> tuple[bytes, str]:
+    """
+    Return (image_bytes, mime_type) for a page.
+
+    Checks disk cache first.  If not cached:
+      - Tries the OCR preprocessor → JPEG (preferred, 70–90% smaller)
+      - Falls back to raw PyMuPDF PNG if OpenCV is unavailable
+
+    Raises FileNotFoundError if the session doesn't exist.
+    """
+    sdir = _session_dir(session_id)
+    if not sdir.exists():
+        raise FileNotFoundError(f"OCR session not found or expired — please re-upload the PDF")
+
+    cached = _cached_page_path(session_id, page_index)
+    if cached.exists():
+        return cached.read_bytes(), "image/jpeg"
+
+    preprocessor = _get_preprocessor()
+    if preprocessor is not None:
+        return _preprocess_page(preprocessor, session_id, page_index, cached)
+    else:
+        return _render_page_png(session_id, page_index), "image/png"
+
+
+def _preprocess_page(
+    preprocessor, session_id: str, page_index: int, cache_path: Path
+) -> tuple[bytes, str]:
+    """Run the OCR preprocessor on a single page and cache the result."""
+    pdf = _pdf_path(session_id)
+    if not pdf.exists():
+        raise FileNotFoundError("OCR session not found or expired — please re-upload the PDF")
+
+    # process_pdf_to_memory with page_range=(n, n+1) processes exactly one page
+    images, metrics = preprocessor.process_pdf_to_memory(
+        pdf, page_range=(page_index, page_index + 1)
+    )
+
+    img_bytes = images[0] if images else None
+    if not img_bytes:
+        # Blank page or error — fall back to raw PNG so we still show something
+        log.warning(
+            "Page %d preprocessor returned None (blank/error) — falling back to PNG",
+            page_index,
+        )
+        return _render_page_png(session_id, page_index), "image/png"
+
+    pm = metrics.page_metrics[0] if metrics.page_metrics else None
+    if pm:
+        log.info(
+            "Page %d preprocessed | %dx%d → %dx%d | %.1f%% smaller | ~%d tokens",
+            page_index,
+            pm.original_dimensions[0], pm.original_dimensions[1],
+            pm.optimized_dimensions[0], pm.optimized_dimensions[1],
+            pm.size_reduction_pct,
+            pm.estimated_gemini_tokens_after,
+        )
+
+    cache_path.write_bytes(img_bytes)
+    return img_bytes, "image/jpeg"
+
+
+def _render_page_png(session_id: str, page_index: int) -> bytes:
+    """Fallback: render a page via PyMuPDF at 2× zoom and return PNG bytes."""
+    import fitz
+
+    pdf = _pdf_path(session_id)
+    if not pdf.exists():
+        raise FileNotFoundError("OCR session not found or expired — please re-upload the PDF")
+
+    with fitz.open(str(pdf)) as doc:
+        page = doc[page_index]
+        mat = fitz.Matrix(2.0, 2.0)
+        pix = page.get_pixmap(matrix=mat)
+        img_bytes = pix.tobytes("png")
+
+    return img_bytes
