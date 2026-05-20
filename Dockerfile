@@ -8,6 +8,9 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     ffmpeg \
     postgresql-client \
+    libglib2.0-0 \
+    libgomp1 \
+    libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install poetry==1.8.3
