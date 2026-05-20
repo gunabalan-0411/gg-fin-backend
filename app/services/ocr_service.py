@@ -146,6 +146,41 @@ def save_pdf(file_bytes: bytes) -> tuple[str, int]:
     return session_id, total_pages
 
 
+def save_and_warm(file_bytes: bytes) -> tuple[str, int]:
+    """
+    Save PDF, preprocess page 0 eagerly, and return (session_id, total_pages).
+
+    Called from the upload endpoint so that by the time the HTTP response
+    arrives at the browser, page 0 is already cached and displays instantly.
+    """
+    session_id, total_pages = save_pdf(file_bytes)
+    try:
+        _get_page_bytes(session_id, 0)
+        log.info("Upload: page 0 warmed for session %s", session_id)
+    except Exception as exc:
+        log.warning("Upload: page 0 warm failed (will load on demand): %s", exc)
+    return session_id, total_pages
+
+
+def preprocess_remaining_pages(session_id: str, total_pages: int) -> None:
+    """
+    Background task: preprocess pages 1..total_pages-1 and cache them.
+
+    Runs after the upload response is sent so it never delays the client.
+    Pages are processed sequentially so memory pressure stays low.
+    """
+    for page_index in range(1, total_pages):
+        cached = _cached_page_path(session_id, page_index)
+        if cached.exists():
+            continue
+        try:
+            _get_page_bytes(session_id, page_index)
+            log.info("Background: cached page %d/%d for session %s",
+                     page_index + 1, total_pages, session_id)
+        except Exception as exc:
+            log.warning("Background: page %d failed: %s", page_index, exc)
+
+
 def get_page_image_b64(session_id: str, page_index: int) -> str:
     """
     Return base64-encoded image for display.

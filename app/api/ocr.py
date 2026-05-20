@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from sqlmodel import Session, col, select
@@ -18,6 +18,7 @@ router = APIRouter()
 
 @router.post("/upload")
 async def upload_pdf(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     _=Depends(get_current_user),
 ):
@@ -25,9 +26,17 @@ async def upload_pdf(
         raise HTTPException(400, "Only PDF files are accepted")
     content = await file.read()
     try:
-        session_id, total_pages = await run_in_threadpool(ocr_service.save_pdf, content)
+        # save_and_warm preprocesses page 0 before returning so the browser
+        # can display it the instant the upload response arrives.
+        session_id, total_pages = await run_in_threadpool(ocr_service.save_and_warm, content)
     except Exception as exc:
         raise HTTPException(500, f"Failed to process PDF: {exc}")
+
+    # Preprocess the remaining pages in the background so navigation is instant.
+    if total_pages > 1:
+        background_tasks.add_task(
+            ocr_service.preprocess_remaining_pages, session_id, total_pages
+        )
     return {"session_id": session_id, "total_pages": total_pages}
 
 
