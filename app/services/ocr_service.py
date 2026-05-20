@@ -155,32 +155,66 @@ def get_page_image_b64(session_id: str, page_index: int) -> str:
     return base64.b64encode(img_bytes).decode()
 
 
+_vertex_credentials: Optional[object] = None
+_vertex_project: str = "gg-finance-2021"
+
+
+def _get_vertex_credentials():
+    """Load and cache the service account credentials (JSON parsing is done once)."""
+    global _vertex_credentials, _vertex_project
+    if _vertex_credentials is not None:
+        return _vertex_credentials
+
+    import json as _json
+    from google.oauth2 import service_account
+
+    sa_key_json = os.environ.get("GCP_SERVICE_ACCOUNT_KEY")
+    if not sa_key_json:
+        raise ValueError("GCP_SERVICE_ACCOUNT_KEY environment variable is not set")
+
+    sa_info = _json.loads(sa_key_json)
+    _vertex_project = sa_info.get("project_id", "gg-finance-2021")
+    _vertex_credentials = service_account.Credentials.from_service_account_info(
+        sa_info,
+        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+    )
+    return _vertex_credentials
+
+
+def _vertex_location_for(model: str) -> str:
+    """
+    Gemini 3.x preview models require the global Vertex AI endpoint.
+    Stable/flash models run in the regional endpoint (default us-central1).
+    """
+    if model.startswith("gemini-3"):
+        return "global"
+    return os.environ.get("VERTEX_AI_LOCATION", "us-central1")
+
+
 def extract_page(
     session_id: str, page_index: int, model: str = "gemini-2.5-flash"
 ) -> tuple[str, list[dict]]:
     """
-    Preprocess the requested page and run Gemini vision extraction.
+    Preprocess the requested page and run Gemini vision extraction via Vertex AI.
     Returns (page_b64_for_display, list_of_extracted_records).
     """
-    from google import genai
-    from google.genai import types
+    import vertexai
+    from vertexai.generative_models import GenerativeModel, Part
 
     img_bytes, mime_type = _get_page_bytes(session_id, page_index)
     page_b64 = base64.b64encode(img_bytes).decode()
 
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY environment variable is not set")
+    credentials = _get_vertex_credentials()
+    location = _vertex_location_for(model)
+    vertexai.init(project=_vertex_project, location=location, credentials=credentials)
+    log.info("Vertex AI: model=%s location=%s", model, location)
 
-    client = genai.Client(api_key=api_key)
+    gemini = GenerativeModel(model)
+    response = gemini.generate_content([
+        EXTRACTION_PROMPT,
+        Part.from_data(data=img_bytes, mime_type=mime_type),
+    ])
 
-    response = client.models.generate_content(
-        model=model,
-        contents=[
-            EXTRACTION_PROMPT,
-            types.Part.from_bytes(data=img_bytes, mime_type=mime_type),
-        ],
-    )
     text = response.text.strip()
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```\s*$", "", text)
