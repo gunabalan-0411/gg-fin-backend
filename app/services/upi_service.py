@@ -20,14 +20,27 @@ from app.models.upi import GmailSettings, UpiTransaction
 
 # ── Regex patterns ────────────────────────────────────────────────────────────
 
-# HDFC credit SMS/email pattern
-# Matches both 2-digit and 4-digit year formats:
-#   e.g. "... credited to your account **2371 by VPA xyz on 13-03-26."
-#   e.g. "... credited to your account **2371 by VPA xyz on 13-03-2026."
-_EMAIL_CREDIT = re.compile(
+# Old HDFC one-liner format (before ~May 2026):
+# "Rs. 1000.00 is successfully credited to your account **2371 by VPA vpa@bank
+#  Name on 04-05-26. Your UPI transaction reference number is 612482567284."
+_EMAIL_CREDIT_OLD = re.compile(
     r"Rs\.?\s*([\d,]+\.?\d*)\s+is\s+successfully\s+credited"
     r".+?by\s+VPA\s+(\S+)\s+(.+?)\s+on\s+(\d{2}-\d{2}-\d{2,4})"
     r".+?reference\s+number\s+is\s+(\d+)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# New HDFC structured format (from ~May 2026):
+# "Rs.1.00 has been successfully credited to your HDFC Bank account ...
+#  Transaction Details:
+#  a. Date: 23-05-26
+#  b. Sender: Mrs B Rajeswari P (VPA: amourk0408@okaxis)
+#  c. UPI Reference No.: 614345473744"
+_EMAIL_CREDIT_NEW = re.compile(
+    r"Rs\.?\s*([\d,]+\.?\d*)\s+has\s+been\s+successfully\s+credited"
+    r".+?Date:\s*(\d{2}-\d{2}-\d{2,4})"
+    r".+?Sender:\s*(.+?)\s*\(VPA:\s*(\S+?)\)"
+    r".+?UPI\s+Reference\s+No\.:\s*(\d+)",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -347,26 +360,39 @@ def _extract_body(msg: dict) -> str:
 
 
 def _parse_email_credit(body: str) -> Optional[UpiTransaction]:
-    m = _EMAIL_CREDIT.search(body)
-    if not m:
-        return None
-    try:
-        amount = _to_decimal(m.group(1))
-        vpa = m.group(2).strip()
-        name = m.group(3).strip()
-        txn_date = _parse_date_ddmmyy(m.group(4))
-        ref_no = m.group(5).strip()
-        return UpiTransaction(
-            upi_ref_no=ref_no,
-            amount=amount,
-            transaction_type="credit",
-            sender_vpa=vpa,
-            sender_name=name,
-            transaction_date=txn_date,
-            source="gmail",
-        )
-    except (InvalidOperation, ValueError, IndexError):
-        return None
+    # Try old one-liner format first (groups: amount, vpa, name, date, ref)
+    m = _EMAIL_CREDIT_OLD.search(body)
+    if m:
+        try:
+            return UpiTransaction(
+                upi_ref_no=m.group(5).strip(),
+                amount=_to_decimal(m.group(1)),
+                transaction_type="credit",
+                sender_vpa=m.group(2).strip(),
+                sender_name=m.group(3).strip(),
+                transaction_date=_parse_date_ddmmyy(m.group(4)),
+                source="gmail",
+            )
+        except (InvalidOperation, ValueError, IndexError):
+            pass
+
+    # Try new structured format (groups: amount, date, name, vpa, ref)
+    m = _EMAIL_CREDIT_NEW.search(body)
+    if m:
+        try:
+            return UpiTransaction(
+                upi_ref_no=m.group(5).strip(),
+                amount=_to_decimal(m.group(1)),
+                transaction_type="credit",
+                sender_vpa=m.group(4).strip(),
+                sender_name=m.group(3).strip(),
+                transaction_date=_parse_date_ddmmyy(m.group(2)),
+                source="gmail",
+            )
+        except (InvalidOperation, ValueError, IndexError):
+            pass
+
+    return None
 
 
 # ── CSV import ────────────────────────────────────────────────────────────────
