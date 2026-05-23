@@ -33,8 +33,15 @@ def gmail_auth_url(request: Request, _=Depends(get_current_user)):
         settings.GMAIL_REDIRECT_URI
         or f"{_callback_base(request)}/api/upi/gmail/callback"
     )
+    # Pass the frontend origin through OAuth state so the callback can redirect
+    # back to the correct host regardless of FRONTEND_URL env var.
+    frontend_origin = (
+        settings.FRONTEND_URL
+        or request.headers.get("origin")
+        or "http://localhost:3000"
+    )
     try:
-        url = upi_service.get_auth_url(redirect_uri)
+        url = upi_service.get_auth_url(redirect_uri, frontend_origin)
         return {"url": url}
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -44,6 +51,7 @@ def gmail_auth_url(request: Request, _=Depends(get_current_user)):
 def gmail_callback(
     request: Request,
     code: str = Query(...),
+    state: str = Query(default=""),
     session: Session = Depends(get_session),
 ):
     """Google redirects here after user consent. No auth required (public)."""
@@ -51,13 +59,15 @@ def gmail_callback(
         settings.GMAIL_REDIRECT_URI
         or f"{_callback_base(request)}/api/upi/gmail/callback"
     )
+    # state carries the frontend origin set in gmail_auth_url
+    frontend_origin = state if state and state != "default" else settings.FRONTEND_URL or "http://localhost:3000"
     try:
         upi_service.exchange_code(code, redirect_uri, session)
     except Exception as e:
         return RedirectResponse(
-            url=f"{settings.FRONTEND_URL}/oauth-callback?type=gmail&status=error&msg={str(e)[:80]}"
+            url=f"{frontend_origin}/oauth-callback?type=gmail&status=error&msg={str(e)[:80]}"
         )
-    return RedirectResponse(url=f"{settings.FRONTEND_URL}/oauth-callback?type=gmail&status=connected")
+    return RedirectResponse(url=f"{frontend_origin}/oauth-callback?type=gmail&status=connected")
 
 
 @router.get("/gmail/status")

@@ -69,8 +69,12 @@ _GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
 _GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 
-def get_auth_url(redirect_uri: str) -> str:
-    """Build the Google OAuth consent URL without PKCE."""
+def get_auth_url(redirect_uri: str, frontend_origin: str = "") -> str:
+    """Build the Google OAuth consent URL without PKCE.
+
+    frontend_origin is embedded in the state so the callback knows where to
+    redirect the browser after the code exchange, regardless of env config.
+    """
     import os
     os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")  # allow http on localhost
 
@@ -85,6 +89,7 @@ def get_auth_url(redirect_uri: str) -> str:
         _GOOGLE_AUTH_URI,
         access_type="offline",
         prompt="consent",
+        state=frontend_origin or "default",
     )
     return auth_url
 

@@ -32,7 +32,7 @@ _MAX_BACKUPS = 10
 
 # ── OAuth ─────────────────────────────────────────────────────────────────────
 
-def get_auth_url(redirect_uri: str) -> str:
+def get_auth_url(redirect_uri: str, frontend_origin: str = "") -> str:
     import os as _os
     _os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
     from requests_oauthlib import OAuth2Session  # type: ignore
@@ -46,6 +46,7 @@ def get_auth_url(redirect_uri: str) -> str:
         _GOOGLE_AUTH_URI,
         access_type="offline",
         prompt="consent",
+        state=frontend_origin or "default",
     )
     return auth_url
 

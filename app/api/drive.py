@@ -28,8 +28,13 @@ def drive_auth_url(request: Request, _=Depends(get_current_user)):
         settings.DRIVE_REDIRECT_URI
         or f"{_callback_base(request)}/api/drive/oauth/callback"
     )
+    frontend_origin = (
+        settings.FRONTEND_URL
+        or request.headers.get("origin")
+        or "http://localhost:3000"
+    )
     try:
-        url = drive_service.get_auth_url(redirect_uri)
+        url = drive_service.get_auth_url(redirect_uri, frontend_origin)
         return {"url": url}
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -39,6 +44,7 @@ def drive_auth_url(request: Request, _=Depends(get_current_user)):
 def drive_callback(
     request: Request,
     code: str = Query(...),
+    state: str = Query(default=""),
     session: Session = Depends(get_session),
 ):
     """Google redirects here after Drive consent. Public (no auth required)."""
@@ -46,13 +52,14 @@ def drive_callback(
         settings.DRIVE_REDIRECT_URI
         or f"{_callback_base(request)}/api/drive/oauth/callback"
     )
+    frontend_origin = state if state and state != "default" else settings.FRONTEND_URL or "http://localhost:3000"
     try:
         drive_service.exchange_code(code, redirect_uri, session)
     except Exception as e:
         return RedirectResponse(
-            url=f"{settings.FRONTEND_URL}/oauth-callback?type=drive&status=error&msg={str(e)[:80]}"
+            url=f"{frontend_origin}/oauth-callback?type=drive&status=error&msg={str(e)[:80]}"
         )
-    return RedirectResponse(url=f"{settings.FRONTEND_URL}/oauth-callback?type=drive&status=connected")
+    return RedirectResponse(url=f"{frontend_origin}/oauth-callback?type=drive&status=connected")
 
 
 @router.get("/status")
