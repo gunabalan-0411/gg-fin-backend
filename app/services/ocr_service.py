@@ -26,7 +26,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from rapidfuzz import fuzz, process
+import re as _re
 
 log = logging.getLogger(__name__)
 
@@ -263,14 +263,22 @@ def extract_page(
 
 
 def fuzzy_match(name: str, customers: list[dict], limit: int = 3) -> list[dict]:
-    """Return top `limit` fuzzy matches from a {id, name} list."""
+    """Return top `limit` fuzzy matches using the multi-algorithm scorer (same as voice service)."""
     if not customers or not name:
         return []
-    names = [c["name"] for c in customers]
-    matches = process.extract(name, names, scorer=fuzz.WRatio, limit=limit)
+    from app.utils.name_matching import get_similar_score
+    candidates = [
+        {
+            "customer_id": c["id"],
+            "name": _re.sub(r"\s+", " ", c["name"].strip().lower()),
+            "display_name": c["name"],
+        }
+        for c in customers
+    ]
+    results = get_similar_score(name, candidates)
     return [
-        {"id": customers[idx]["id"], "name": matched_name, "score": round(score / 100, 2)}
-        for matched_name, score, idx in matches
+        {"id": r["customer_id"], "name": r["name"], "score": round(r["score"] / 100, 2)}
+        for r in results[:limit]
     ]
 
 
