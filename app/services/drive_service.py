@@ -32,14 +32,14 @@ _MAX_BACKUPS = 10
 
 # ── OAuth ─────────────────────────────────────────────────────────────────────
 
-def get_auth_url() -> str:
+def get_auth_url(redirect_uri: str) -> str:
     import os as _os
     _os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
     from requests_oauthlib import OAuth2Session  # type: ignore
 
     oauth = OAuth2Session(
         client_id=settings.GOOGLE_CLIENT_ID,
-        redirect_uri=settings.DRIVE_REDIRECT_URI,
+        redirect_uri=redirect_uri,
         scope=_DRIVE_SCOPES,
     )
     auth_url, _ = oauth.authorization_url(
@@ -50,7 +50,7 @@ def get_auth_url() -> str:
     return auth_url
 
 
-def exchange_code(code: str, session: Session) -> str:
+def exchange_code(code: str, redirect_uri: str, session: Session) -> str:
     import requests as http_requests
 
     resp = http_requests.post(
@@ -59,7 +59,7 @@ def exchange_code(code: str, session: Session) -> str:
             "code": code,
             "client_id": settings.GOOGLE_CLIENT_ID,
             "client_secret": settings.GOOGLE_CLIENT_SECRET,
-            "redirect_uri": settings.DRIVE_REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "grant_type": "authorization_code",
         },
         timeout=15,

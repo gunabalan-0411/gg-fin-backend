@@ -69,7 +69,7 @@ _GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
 _GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 
-def get_auth_url() -> str:
+def get_auth_url(redirect_uri: str) -> str:
     """Build the Google OAuth consent URL without PKCE."""
     import os
     os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")  # allow http on localhost
@@ -78,7 +78,7 @@ def get_auth_url() -> str:
 
     oauth = OAuth2Session(
         client_id=settings.GOOGLE_CLIENT_ID,
-        redirect_uri=settings.GMAIL_REDIRECT_URI,
+        redirect_uri=redirect_uri,
         scope=_GMAIL_SCOPES,
     )
     auth_url, _ = oauth.authorization_url(
@@ -89,7 +89,7 @@ def get_auth_url() -> str:
     return auth_url
 
 
-def exchange_code(code: str, session: Session) -> str:
+def exchange_code(code: str, redirect_uri: str, session: Session) -> str:
     """Exchange OAuth code for tokens via plain POST (no PKCE), persist to DB."""
     import requests as http_requests  # plain requests, no PKCE
     from datetime import timezone as tz
@@ -100,7 +100,7 @@ def exchange_code(code: str, session: Session) -> str:
             "code": code,
             "client_id": settings.GOOGLE_CLIENT_ID,
             "client_secret": settings.GOOGLE_CLIENT_SECRET,
-            "redirect_uri": settings.GMAIL_REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "grant_type": "authorization_code",
         },
         timeout=15,

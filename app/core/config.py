@@ -15,8 +15,11 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:3000/api/backup/oauth/callback"
-    GMAIL_REDIRECT_URI: str = "http://localhost:8000/api/upi/gmail/callback"
-    DRIVE_REDIRECT_URI: str = "http://localhost:8000/api/drive/oauth/callback"
+    # Auto-derived from request host at runtime — override only if behind a non-standard proxy
+    GMAIL_REDIRECT_URI: str = ""
+    DRIVE_REDIRECT_URI: str = ""
+    # Production frontend origin, e.g. https://gg-fin.railway.app (set in Railway env vars)
+    FRONTEND_URL: str = "http://localhost:3000"
 
     # Set this on a fresh machine to auto-restore the DB from Drive on first boot.
     # Get the value from Settings → Google Drive → "Show Refresh Token" on the source machine.

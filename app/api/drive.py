@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from sqlmodel import Session
 
@@ -10,15 +10,26 @@ from app.services import drive_service
 router = APIRouter()
 
 
+def _callback_base(request: Request) -> str:
+    """Return the backend base URL, respecting Railway's HTTPS proxy headers."""
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+    return f"{proto}://{host}"
+
+
 @router.get("/auth-url")
-def drive_auth_url(_=Depends(get_current_user)):
+def drive_auth_url(request: Request, _=Depends(get_current_user)):
     if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
         raise HTTPException(
             status_code=400,
             detail="GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET not configured in .env",
         )
+    redirect_uri = (
+        settings.DRIVE_REDIRECT_URI
+        or f"{_callback_base(request)}/api/drive/oauth/callback"
+    )
     try:
-        url = drive_service.get_auth_url()
+        url = drive_service.get_auth_url(redirect_uri)
         return {"url": url}
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -26,17 +37,22 @@ def drive_auth_url(_=Depends(get_current_user)):
 
 @router.get("/oauth/callback")
 def drive_callback(
+    request: Request,
     code: str = Query(...),
     session: Session = Depends(get_session),
 ):
     """Google redirects here after Drive consent. Public (no auth required)."""
+    redirect_uri = (
+        settings.DRIVE_REDIRECT_URI
+        or f"{_callback_base(request)}/api/drive/oauth/callback"
+    )
     try:
-        drive_service.exchange_code(code, session)
+        drive_service.exchange_code(code, redirect_uri, session)
     except Exception as e:
         return RedirectResponse(
-            url=f"http://localhost:3000/oauth-callback?type=drive&status=error&msg={str(e)[:80]}"
+            url=f"{settings.FRONTEND_URL}/oauth-callback?type=drive&status=error&msg={str(e)[:80]}"
         )
-    return RedirectResponse(url="http://localhost:3000/oauth-callback?type=drive&status=connected")
+    return RedirectResponse(url=f"{settings.FRONTEND_URL}/oauth-callback?type=drive&status=connected")
 
 
 @router.get("/status")

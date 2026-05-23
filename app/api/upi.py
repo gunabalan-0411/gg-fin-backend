@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import RedirectResponse
 from sqlmodel import Session, select, col
 from typing import Optional
@@ -12,18 +12,29 @@ from app.services import upi_service
 router = APIRouter()
 
 
+def _callback_base(request: Request) -> str:
+    """Return the backend base URL, respecting Railway's HTTPS proxy headers."""
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+    return f"{proto}://{host}"
+
+
 # ── Gmail OAuth ───────────────────────────────────────────────────────────────
 
 @router.get("/gmail/auth-url")
-def gmail_auth_url(_=Depends(get_current_user)):
+def gmail_auth_url(request: Request, _=Depends(get_current_user)):
     """Return the Google OAuth URL for the frontend to open."""
     if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
         raise HTTPException(
             status_code=400,
             detail="GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET not configured in .env",
         )
+    redirect_uri = (
+        settings.GMAIL_REDIRECT_URI
+        or f"{_callback_base(request)}/api/upi/gmail/callback"
+    )
     try:
-        url = upi_service.get_auth_url()
+        url = upi_service.get_auth_url(redirect_uri)
         return {"url": url}
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -31,17 +42,22 @@ def gmail_auth_url(_=Depends(get_current_user)):
 
 @router.get("/gmail/callback")
 def gmail_callback(
+    request: Request,
     code: str = Query(...),
     session: Session = Depends(get_session),
 ):
     """Google redirects here after user consent. No auth required (public)."""
+    redirect_uri = (
+        settings.GMAIL_REDIRECT_URI
+        or f"{_callback_base(request)}/api/upi/gmail/callback"
+    )
     try:
-        upi_service.exchange_code(code, session)
+        upi_service.exchange_code(code, redirect_uri, session)
     except Exception as e:
         return RedirectResponse(
-            url=f"http://localhost:3000/oauth-callback?type=gmail&status=error&msg={str(e)[:80]}"
+            url=f"{settings.FRONTEND_URL}/oauth-callback?type=gmail&status=error&msg={str(e)[:80]}"
         )
-    return RedirectResponse(url="http://localhost:3000/oauth-callback?type=gmail&status=connected")
+    return RedirectResponse(url=f"{settings.FRONTEND_URL}/oauth-callback?type=gmail&status=connected")
 
 
 @router.get("/gmail/status")
