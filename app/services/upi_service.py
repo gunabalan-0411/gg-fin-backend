@@ -21,12 +21,12 @@ from app.models.upi import GmailSettings, UpiTransaction
 # ── Regex patterns ────────────────────────────────────────────────────────────
 
 # HDFC credit SMS/email pattern
-# e.g. "Rs. 500.00 is successfully credited to your account **2371 by VPA
-#       sakthiveljilla23184-5@okicici R Sakthivel on 13-03-26.
-#       Your UPI transaction reference number is 643818139861."
+# Matches both 2-digit and 4-digit year formats:
+#   e.g. "... credited to your account **2371 by VPA xyz on 13-03-26."
+#   e.g. "... credited to your account **2371 by VPA xyz on 13-03-2026."
 _EMAIL_CREDIT = re.compile(
     r"Rs\.?\s*([\d,]+\.?\d*)\s+is\s+successfully\s+credited"
-    r".+?by\s+VPA\s+(\S+)\s+(.+?)\s+on\s+(\d{2}-\d{2}-\d{2})"
+    r".+?by\s+VPA\s+(\S+)\s+(.+?)\s+on\s+(\d{2}-\d{2}-\d{2,4})"
     r".+?reference\s+number\s+is\s+(\d+)",
     re.IGNORECASE | re.DOTALL,
 )
@@ -194,15 +194,22 @@ def sync_gmail(session: Session) -> dict:
 
     gmail = _build_gmail_service(g, session)
 
-    # Fetch HDFC credit emails from last 1 year
+    # Fetch HDFC credit emails from last 1 year — paginate to get all results
     after_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y/%m/%d")
     query = f"from:hdfcbank credited after:{after_date}"
 
-    results = gmail.users().messages().list(
-        userId="me", q=query, maxResults=500
-    ).execute()
-
-    messages = results.get("messages", [])
+    messages = []
+    page_request = gmail.users().messages().list(userId="me", q=query, maxResults=500)
+    while page_request is not None:
+        page = page_request.execute()
+        messages.extend(page.get("messages", []))
+        next_token = page.get("nextPageToken")
+        page_request = (
+            gmail.users().messages().list(
+                userId="me", q=query, maxResults=500, pageToken=next_token
+            )
+            if next_token else None
+        )
     logger.info("Gmail sync: found %d messages for query: %s", len(messages), query)
     imported = 0
     skipped = 0
@@ -243,6 +250,76 @@ def sync_gmail(session: Session) -> dict:
 
     session.commit()
     return {"imported": imported, "skipped": skipped, "total_found": len(messages)}
+
+
+def sync_gmail_stream(session: Session):
+    """Generator that yields SSE-formatted progress events for the sync operation."""
+    import json
+
+    def _event(data: dict) -> str:
+        return f"data: {json.dumps(data)}\n\n"
+
+    g = session.get(GmailSettings, 1)
+    if not g or not g.access_token:
+        yield _event({"error": "Gmail not connected."})
+        return
+
+    try:
+        gmail = _build_gmail_service(g, session)
+    except Exception as e:
+        yield _event({"error": str(e)})
+        return
+
+    after_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y/%m/%d")
+    query = f"from:hdfcbank credited after:{after_date}"
+
+    # Paginate to collect all message refs first
+    yield _event({"stage": "listing", "total": 0, "processed": 0, "imported": 0, "skipped": 0})
+    messages = []
+    page_request = gmail.users().messages().list(userId="me", q=query, maxResults=500)
+    while page_request is not None:
+        page = page_request.execute()
+        messages.extend(page.get("messages", []))
+        next_token = page.get("nextPageToken")
+        page_request = (
+            gmail.users().messages().list(userId="me", q=query, maxResults=500, pageToken=next_token)
+            if next_token else None
+        )
+
+    total = len(messages)
+    logger.info("Gmail sync-stream: found %d messages", total)
+    yield _event({"stage": "processing", "total": total, "processed": 0, "imported": 0, "skipped": 0})
+
+    imported = 0
+    skipped = 0
+
+    for i, msg_ref in enumerate(messages):
+        try:
+            msg = gmail.users().messages().get(userId="me", id=msg_ref["id"], format="full").execute()
+            body = _extract_body(msg)
+            if not body:
+                skipped += 1
+            else:
+                txn = _parse_email_credit(body)
+                if not txn:
+                    skipped += 1
+                else:
+                    existing = session.exec(
+                        select(UpiTransaction).where(UpiTransaction.upi_ref_no == txn.upi_ref_no)
+                    ).first()
+                    if existing:
+                        skipped += 1
+                    else:
+                        session.add(txn)
+                        imported += 1
+        except Exception as exc:
+            logger.warning("sync_gmail_stream msg %s error: %s", msg_ref["id"], exc)
+            skipped += 1
+
+        yield _event({"stage": "processing", "total": total, "processed": i + 1, "imported": imported, "skipped": skipped})
+
+    session.commit()
+    yield _event({"stage": "done", "total": total, "processed": total, "imported": imported, "skipped": skipped})
 
 
 def _extract_body(msg: dict) -> str:

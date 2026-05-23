@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlmodel import Session, select, col
 from typing import Optional
 
@@ -102,6 +102,19 @@ def gmail_sync(
         import logging, traceback
         logging.getLogger(__name__).error("Gmail sync failed: %s\n%s", e, traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/gmail/sync-stream")
+def gmail_sync_stream(
+    session: Session = Depends(get_session),
+    _=Depends(get_current_user),
+):
+    """SSE endpoint — streams per-email progress while syncing Gmail."""
+    return StreamingResponse(
+        upi_service.sync_gmail_stream(session),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── CSV import ────────────────────────────────────────────────────────────────
