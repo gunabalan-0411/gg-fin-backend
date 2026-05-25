@@ -110,7 +110,7 @@ async def extract_page(
         matches = ocr_service.fuzzy_match(rec.get("customer_name", ""), pool)
         rec["customer_suggestions"] = matches
         best = matches[0] if matches else None
-        rec["customer_id"] = best["id"] if best and best["score"] >= 0.75 else None
+        rec["customer_id"] = best["id"] if best and best["score"] >= 0.90 else None
 
     return {"page_image_b64": page_b64, "records": records}
 
