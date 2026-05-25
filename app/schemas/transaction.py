@@ -14,6 +14,7 @@ class EdiTransactionCreate(BaseModel):
 
 
 class EdiTransactionUpdate(BaseModel):
+    collection_date: Optional[date] = None
     amount: Optional[Decimal] = None
     payment_mode: Optional[str] = None
     payment_status: Optional[str] = None
@@ -34,6 +35,7 @@ class IopTransactionCreate(BaseModel):
 
 
 class IopTransactionUpdate(BaseModel):
+    collection_date: Optional[date] = None
     amount: Optional[Decimal] = None
     payment_mode: Optional[str] = None
     payment_status: Optional[str] = None
