@@ -38,9 +38,9 @@ class EdiTransactionService:
         return True
 
     def upsert(self, customer_id: int, collection_date: date, amount: float, payment_mode: str = "CASH"):
-        existing = self.repo.get_by_customer_and_date(customer_id, collection_date)
+        existing = self.repo.get_by_customer_date_and_mode(customer_id, collection_date, payment_mode)
         if existing:
-            return self.repo.update(existing, {"amount": amount, "payment_mode": payment_mode})
+            return self.repo.update(existing, {"amount": amount})
         return self.repo.create({
             "customer_id": customer_id,
             "collection_date": collection_date,
@@ -80,9 +80,9 @@ class IopTransactionService:
         return True
 
     def upsert(self, customer_id: int, collection_date: date, amount: float, payment_mode: str = "CASH"):
-        existing = self.repo.get_by_customer_and_date(customer_id, collection_date)
+        existing = self.repo.get_by_customer_date_and_mode(customer_id, collection_date, payment_mode)
         if existing:
-            return self.repo.update(existing, {"amount": amount, "payment_mode": payment_mode})
+            return self.repo.update(existing, {"amount": amount})
         return self.repo.create({
             "customer_id": customer_id,
             "collection_date": collection_date,

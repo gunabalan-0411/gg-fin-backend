@@ -36,6 +36,15 @@ class EdiTransactionRepo:
             )
         ).first()
 
+    def get_by_customer_date_and_mode(self, customer_id: int, collection_date: date, payment_mode: str) -> Optional[EdiTransaction]:
+        return self.session.exec(
+            select(EdiTransaction).where(
+                EdiTransaction.customer_id == customer_id,
+                EdiTransaction.collection_date == collection_date,
+                EdiTransaction.payment_mode == payment_mode,
+            )
+        ).first()
+
     def create(self, data: dict) -> EdiTransaction:
         txn = EdiTransaction(**data)
         self.session.add(txn)
@@ -90,6 +99,15 @@ class IopTransactionRepo:
             select(IopTransaction).where(
                 IopTransaction.customer_id == customer_id,
                 IopTransaction.collection_date == collection_date,
+            )
+        ).first()
+
+    def get_by_customer_date_and_mode(self, customer_id: int, collection_date: date, payment_mode: str) -> Optional[IopTransaction]:
+        return self.session.exec(
+            select(IopTransaction).where(
+                IopTransaction.customer_id == customer_id,
+                IopTransaction.collection_date == collection_date,
+                IopTransaction.payment_mode == payment_mode,
             )
         ).first()
 
