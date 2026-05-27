@@ -245,9 +245,9 @@ table {{ border-collapse: collapse; width: 100%; }}
         log.error("PDF render failed:\n%s", traceback.format_exc())
         raise HTTPException(500, "PDF generation failed — check server logs")
 
-    safe_name = (title or "customer").replace(" ", "_")
+    english_name = (customer.customer_name or "customer").replace(" ", "_")
     return Response(
         content=buf.getvalue(),
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}_transactions.pdf"'},
+        headers={"Content-Disposition": f'attachment; filename="{english_name}_transactions.pdf"'},
     )
