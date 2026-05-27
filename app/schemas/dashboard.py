@@ -27,3 +27,61 @@ class DailyActivity(BaseModel):
     iop_count: int
     edi_amount: float
     iop_amount: float
+
+
+class LoanSummary(BaseModel):
+    edi_total_loan: float = 0
+    edi_total_receivable: float = 0
+    iop_total_loan: float = 0
+    iop_total_receivable: float = 0
+
+
+class CustomerBrief(BaseModel):
+    customer_id: int
+    customer_name: str
+    tamil_name: str
+    loan_amount: float
+    frequency: int = 1
+
+
+class IopRemindersResponse(BaseModel):
+    yesterday: list[CustomerBrief] = []
+    today: list[CustomerBrief] = []
+    tomorrow: list[CustomerBrief] = []
+
+
+class IopCalendarDay(BaseModel):
+    date: str
+    customers: list[CustomerBrief]
+
+
+class EdiInactiveCustomer(BaseModel):
+    customer_id: int
+    customer_name: str
+    tamil_name: str
+    loan_amount: float
+    outstanding_balance: float
+    last_payment_date: str | None
+    days_since_payment: int
+
+
+class EdiDefaulter(BaseModel):
+    customer_id: int
+    customer_name: str
+    tamil_name: str
+    loan_amount: float
+    outstanding_balance: float
+    last_payment_date: str | None
+    days_overdue: int
+
+
+class IopMonthlyDue(BaseModel):
+    customer_id: int
+    customer_name: str
+    tamil_name: str
+    loan_amount: float
+    monthly_interest: float
+    paid_this_month: float
+    due_this_month: float
+    payments_due_so_far: int
+    frequency: int

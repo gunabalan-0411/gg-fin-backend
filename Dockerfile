@@ -28,6 +28,11 @@ RUN poetry config virtualenvs.create false \
 
 RUN pip install jellyfish indic-transliteration google-auth-oauthlib google-api-python-client xlrd google-genai PyMuPDF opencv-python-headless numpy
 
+# Tamil font for server-side PDF generation (HarfBuzz shaping via MuPDF)
+RUN mkdir -p /app/fonts && \
+    curl -fsSL "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/hinted/ttf/NotoSansTamil/NotoSansTamil-Regular.ttf" \
+    -o /app/fonts/NotoSansTamil-Regular.ttf
+
 COPY . .
 
 # Bake whisper-small into the image so it's ready without a runtime download
