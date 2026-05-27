@@ -11,7 +11,7 @@ class DefaultedBalance(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     date: datetime.date = Field(index=True)
     product: str  # "edi" or "iop"
-    customer_id: int
-    customer_name: str
+    customer_id: Optional[int] = None
+    customer_name: Optional[str] = None
     amount: Decimal = Field(decimal_places=2, max_digits=12)
     notes: Optional[str] = None

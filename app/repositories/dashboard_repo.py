@@ -70,6 +70,46 @@ class DashboardRepo:
         row = result.first()
         return float(row.total) if row else 0.0
 
+    def get_monthly_unclaimed(self):
+        result = self.session.exec(text("""
+            SELECT
+                TO_CHAR(date, 'YYYY-MM') AS month,
+                SUM(amount) AS unclaimed
+            FROM tbl_unclaimed_balance
+            GROUP BY TO_CHAR(date, 'YYYY-MM')
+            ORDER BY TO_CHAR(date, 'YYYY-MM')
+        """))
+        return [dict(row._mapping) for row in result]
+
+    def get_monthly_defaulted(self):
+        result = self.session.exec(text("""
+            SELECT
+                TO_CHAR(date, 'YYYY-MM') AS month,
+                SUM(amount) AS defaulted
+            FROM tbl_defaulted_balance
+            GROUP BY TO_CHAR(date, 'YYYY-MM')
+            ORDER BY TO_CHAR(date, 'YYYY-MM')
+        """))
+        return [dict(row._mapping) for row in result]
+
+    def get_current_month_unclaimed(self) -> float:
+        result = self.session.exec(text("""
+            SELECT COALESCE(SUM(amount), 0) AS total
+            FROM tbl_unclaimed_balance
+            WHERE DATE_TRUNC('month', date) = DATE_TRUNC('month', CURRENT_DATE)
+        """))
+        row = result.first()
+        return float(row.total) if row else 0.0
+
+    def get_current_month_defaulted(self) -> float:
+        result = self.session.exec(text("""
+            SELECT COALESCE(SUM(amount), 0) AS total
+            FROM tbl_defaulted_balance
+            WHERE DATE_TRUNC('month', date) = DATE_TRUNC('month', CURRENT_DATE)
+        """))
+        row = result.first()
+        return float(row.total) if row else 0.0
+
     def get_daily_activity(self, days: int = 30):
         result = self.session.exec(text(f"""
             SELECT

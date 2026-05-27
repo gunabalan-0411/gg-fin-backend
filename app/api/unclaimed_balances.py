@@ -51,20 +51,23 @@ def create_unclaimed_balance(
     if product not in ("edi", "iop"):
         raise HTTPException(status_code=400, detail="product must be 'edi' or 'iop'")
 
-    customer_id = data.get("customer_id")
-    if product == "edi":
-        customer = session.get(EdiCustomer, customer_id)
-    else:
-        customer = session.get(IopCustomer, customer_id)
+    customer_id = data.get("customer_id") or None
+    customer_name = data.get("customer_name") or None
 
-    if not customer:
-        raise HTTPException(status_code=404, detail="Customer not found")
+    if customer_id:
+        if product == "edi":
+            customer = session.get(EdiCustomer, customer_id)
+        else:
+            customer = session.get(IopCustomer, customer_id)
+        if not customer:
+            raise HTTPException(status_code=404, detail="Customer not found")
+        customer_name = customer.customer_name or None
 
     row = UnclaimedBalance(
         date=data["date"],
         product=product,
         customer_id=customer_id,
-        customer_name=customer.customer_name or "",
+        customer_name=customer_name,
         amount=data["amount"],
         notes=data.get("notes"),
     )
