@@ -19,26 +19,15 @@ class DashboardRepo:
         return [dict(row._mapping) for row in result]
 
     def get_monthly_edi_profit(self):
-        # EDI profit = sum of all customers' interest (portfolio interest income).
-        # Reported for every month that has any EDI/IOP/expense activity so the
-        # current month always shows a non-zero value.
+        # EDI profit per month = interest income from loans originated that month
         result = self.session.exec(text("""
-            WITH active_months AS (
-                SELECT TO_CHAR(collection_date, 'YYYY-MM') AS month FROM tbl_edi_transactions
-                UNION
-                SELECT TO_CHAR(collection_date, 'YYYY-MM') FROM tbl_iop_transactions
-                UNION
-                SELECT TO_CHAR(e."date", 'YYYY-MM') FROM tbl_expense e
-                UNION
-                SELECT TO_CHAR(loan_start_date, 'YYYY-MM') FROM tbl_edi_customer
-                    WHERE loan_start_date IS NOT NULL
-            ),
-            edi_total AS (
-                SELECT COALESCE(SUM(interest), 0) AS edi_profit FROM tbl_edi_customer
-            )
-            SELECT m.month, t.edi_profit
-            FROM active_months m, edi_total t
-            ORDER BY m.month
+            SELECT
+                TO_CHAR(loan_start_date, 'YYYY-MM') AS month,
+                SUM(interest) AS edi_profit
+            FROM tbl_edi_customer
+            WHERE loan_start_date IS NOT NULL
+            GROUP BY TO_CHAR(loan_start_date, 'YYYY-MM')
+            ORDER BY TO_CHAR(loan_start_date, 'YYYY-MM')
         """))
         return [dict(row._mapping) for row in result]
 
