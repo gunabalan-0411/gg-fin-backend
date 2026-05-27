@@ -19,24 +19,37 @@ class DashboardRepo:
         return [dict(row._mapping) for row in result]
 
     def get_monthly_edi_profit(self):
+        # EDI profit = sum of all customers' interest (portfolio interest income).
+        # Reported for every month that has any EDI/IOP/expense activity so the
+        # current month always shows a non-zero value.
         result = self.session.exec(text("""
-            SELECT
-                TO_CHAR(loan_start_date, 'YYYY-MM') AS month,
-                SUM(interest) AS edi_profit
-            FROM tbl_edi_customer
-            GROUP BY TO_CHAR(loan_start_date, 'YYYY-MM')
-            ORDER BY TO_CHAR(loan_start_date, 'YYYY-MM')
+            WITH active_months AS (
+                SELECT TO_CHAR(collection_date, 'YYYY-MM') AS month FROM tbl_edi_transactions
+                UNION
+                SELECT TO_CHAR(collection_date, 'YYYY-MM') FROM tbl_iop_transactions
+                UNION
+                SELECT TO_CHAR(e."date", 'YYYY-MM') FROM tbl_expense e
+                UNION
+                SELECT TO_CHAR(loan_start_date, 'YYYY-MM') FROM tbl_edi_customer
+                    WHERE loan_start_date IS NOT NULL
+            ),
+            edi_total AS (
+                SELECT COALESCE(SUM(interest), 0) AS edi_profit FROM tbl_edi_customer
+            )
+            SELECT m.month, t.edi_profit
+            FROM active_months m, edi_total t
+            ORDER BY m.month
         """))
         return [dict(row._mapping) for row in result]
 
     def get_monthly_expense(self):
         result = self.session.exec(text("""
             SELECT
-                TO_CHAR(date, 'YYYY-MM') AS month,
-                SUM(amount) AS expense
-            FROM tbl_expense
-            GROUP BY TO_CHAR(date, 'YYYY-MM')
-            ORDER BY TO_CHAR(date, 'YYYY-MM')
+                TO_CHAR(e."date", 'YYYY-MM') AS month,
+                SUM(e.amount) AS expense
+            FROM tbl_expense e
+            GROUP BY TO_CHAR(e."date", 'YYYY-MM')
+            ORDER BY TO_CHAR(e."date", 'YYYY-MM')
         """))
         return [dict(row._mapping) for row in result]
 
@@ -51,19 +64,19 @@ class DashboardRepo:
         return float(row.total) if row else 0.0
 
     def get_current_month_edi_profit(self) -> float:
+        # Total interest from all EDI customers — no date filter since interest
+        # is a fixed per-loan field representing the portfolio's monthly income.
         result = self.session.exec(text("""
-            SELECT COALESCE(SUM(interest), 0) AS total
-            FROM tbl_edi_customer
-            WHERE DATE_TRUNC('month', loan_start_date) = DATE_TRUNC('month', CURRENT_DATE)
+            SELECT COALESCE(SUM(interest), 0) AS total FROM tbl_edi_customer
         """))
         row = result.first()
         return float(row.total) if row else 0.0
 
     def get_current_month_expense(self) -> float:
         result = self.session.exec(text("""
-            SELECT COALESCE(SUM(amount), 0) AS total
-            FROM tbl_expense
-            WHERE DATE_TRUNC('month', date) = DATE_TRUNC('month', CURRENT_DATE)
+            SELECT COALESCE(SUM(e.amount), 0) AS total
+            FROM tbl_expense e
+            WHERE DATE_TRUNC('month', e."date") = DATE_TRUNC('month', CURRENT_DATE)
         """))
         row = result.first()
         return float(row.total) if row else 0.0
