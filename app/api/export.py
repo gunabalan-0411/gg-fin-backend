@@ -223,7 +223,7 @@ table {{ border-collapse: collapse; width: 100%; }}
 
     more = True
     while more:
-        device, _ = writer.begin_page(A4)
+        device    = writer.begin_page(A4)
         more, _   = story.place(clip)
         story.draw(device)
         writer.end_page()
