@@ -12,6 +12,7 @@ from sqlmodel import Session
 from app.api.deps import get_current_user
 from app.core.database import get_session
 from app.models.customer import EdiCustomer, IopCustomer
+from app.models.mapping import EdiNameMap, IopNameMap
 from app.services.transaction_service import EdiTransactionService, IopTransactionService
 
 router = APIRouter()
@@ -85,14 +86,18 @@ def export_customer_pdf(
     if product == "edi":
         customer = session.get(EdiCustomer, customer_id)
         txns = EdiTransactionService(session).list_by_customer(customer_id)
+        name_map = session.get(EdiNameMap, customer_id)
     elif product == "iop":
         customer = session.get(IopCustomer, customer_id)
         txns = IopTransactionService(session).list_by_customer(customer_id)
+        name_map = session.get(IopNameMap, customer_id)
     else:
         raise HTTPException(400, "product must be 'edi' or 'iop'")
 
     if not customer:
         raise HTTPException(404, "Customer not found")
+
+    tamil_name = (name_map.customer_name_ta or "") if name_map else ""
 
     L = _LABELS.get(lang, _LABELS["en"])
 
@@ -108,8 +113,8 @@ def export_customer_pdf(
     )
 
     # ── Names ─────────────────────────────────────────────────────────────────
-    is_tamil  = lang == "ta" and bool(customer.tamil_name)
-    title     = customer.tamil_name if is_tamil else (customer.customer_name or "Customer")
+    is_tamil  = lang == "ta" and bool(tamil_name)
+    title     = tamil_name if is_tamil else (customer.customer_name or "Customer")
     subtitle  = customer.customer_name if is_tamil else None
 
     # ── Summary cards ─────────────────────────────────────────────────────────
