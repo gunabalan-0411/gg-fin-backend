@@ -4,10 +4,14 @@ The browser just fetches a URL and receives a ready PDF file.
 No html2canvas, no jsPDF, zero main-thread blocking.
 """
 import io
+import logging
 import os
+import traceback
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlmodel import Session
+
+log = logging.getLogger(__name__)
 
 from app.api.deps import get_current_user
 from app.core.database import get_session
@@ -17,7 +21,7 @@ from app.services.transaction_service import EdiTransactionService, IopTransacti
 
 router = APIRouter()
 
-_FONTS_DIR = os.path.join(os.path.dirname(__file__), "..", "fonts")
+_FONTS_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "fonts")
 _TAMIL_FONT_FILE = "NotoSansTamil-Regular.ttf"
 _TAMIL_FONT_PATH = os.path.join(_FONTS_DIR, _TAMIL_FONT_FILE)
 
@@ -213,22 +217,33 @@ table {{ border-collapse: collapse; width: 100%; }}
 </body></html>"""
 
     # ── Render via fitz.Story (MuPDF + HarfBuzz — correct Tamil ligature shaping) ──
-    archive = fitz.Archive(_FONTS_DIR) if use_tamil else fitz.Archive()
-    story   = fitz.Story(html, archive=archive)
+    try:
+        log.info("fitz version: %s", fitz.version)
 
-    buf    = io.BytesIO()
-    writer = fitz.DocumentWriter(buf)
-    A4     = fitz.paper_rect("a4")           # 595 × 842 pt
-    clip   = A4 + (36, 36, -36, -36)         # ~1.27 cm margins
+        if use_tamil:
+            archive = fitz.Archive(_FONTS_DIR)
+        else:
+            archive = None
 
-    more = True
-    while more:
-        device    = writer.begin_page(A4)
-        more, _   = story.place(clip)
-        story.draw(device)
-        writer.end_page()
+        story = fitz.Story(html, archive=archive) if archive else fitz.Story(html)
 
-    writer.close()
+        buf    = io.BytesIO()
+        writer = fitz.DocumentWriter(buf)
+        A4     = fitz.paper_rect("a4")   # 595 × 842 pt
+        margin = 36
+        clip   = fitz.Rect(A4.x0 + margin, A4.y0 + margin, A4.x1 - margin, A4.y1 - margin)
+
+        more = True
+        while more:
+            device      = writer.begin_page(A4)
+            more, _     = story.place(clip)
+            story.draw(device)
+            writer.end_page()
+
+        writer.close()
+    except Exception:
+        log.error("PDF render failed:\n%s", traceback.format_exc())
+        raise HTTPException(500, "PDF generation failed — check server logs")
 
     safe_name = (title or "customer").replace(" ", "_")
     return Response(
