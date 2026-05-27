@@ -121,6 +121,7 @@ class OcrRecord(BaseModel):
     customer_id: Optional[int]
     product_type: str
     payment_mode: str
+    is_paid: bool = True
     amount: int
 
 
@@ -147,6 +148,6 @@ def submit_records(
             if rec.product_type.upper() == "IOP"
             else EdiTransactionService(session)
         )
-        svc.upsert(rec.customer_id, col_date, rec.amount, rec.payment_mode)
+        svc.upsert(rec.customer_id, col_date, rec.amount, rec.payment_mode, rec.is_paid)
         saved += 1
     return {"submitted": saved}

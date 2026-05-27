@@ -37,16 +37,17 @@ class EdiTransactionService:
         self.repo.delete(txn)
         return True
 
-    def upsert(self, customer_id: int, collection_date: date, amount: float, payment_mode: str = "CASH"):
+    def upsert(self, customer_id: int, collection_date: date, amount: float, payment_mode: str = "CASH", is_paid: bool = True):
+        status = "PAID" if is_paid else "UNPAID"
         existing = self.repo.get_by_customer_date_and_mode(customer_id, collection_date, payment_mode)
         if existing:
-            return self.repo.update(existing, {"amount": amount})
+            return self.repo.update(existing, {"amount": amount, "payment_status": status})
         return self.repo.create({
             "customer_id": customer_id,
             "collection_date": collection_date,
             "amount": amount,
             "payment_mode": payment_mode,
-            "payment_status": "PAID",
+            "payment_status": status,
         })
 
 
@@ -79,14 +80,15 @@ class IopTransactionService:
         self.repo.delete(txn)
         return True
 
-    def upsert(self, customer_id: int, collection_date: date, amount: float, payment_mode: str = "CASH"):
+    def upsert(self, customer_id: int, collection_date: date, amount: float, payment_mode: str = "CASH", is_paid: bool = True):
+        status = "PAID" if is_paid else "UNPAID"
         existing = self.repo.get_by_customer_date_and_mode(customer_id, collection_date, payment_mode)
         if existing:
-            return self.repo.update(existing, {"amount": amount})
+            return self.repo.update(existing, {"amount": amount, "payment_status": status})
         return self.repo.create({
             "customer_id": customer_id,
             "collection_date": collection_date,
             "amount": amount,
             "payment_mode": payment_mode,
-            "payment_status": "PAID",
+            "payment_status": status,
         })
