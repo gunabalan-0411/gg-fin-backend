@@ -22,6 +22,7 @@ class EdiCustomer(SQLModel, table=True):
     interest: Optional[Decimal] = Field(default=None, decimal_places=2, max_digits=12)
     outstanding_balance: Optional[Decimal] = Field(default=None, decimal_places=2, max_digits=12)
     remarks: Optional[str] = None
+    ignore: bool = Field(default=False)
 
 
 class IopCustomer(SQLModel, table=True):
@@ -42,3 +43,4 @@ class IopCustomer(SQLModel, table=True):
     interest: Optional[Decimal] = Field(default=None, decimal_places=2, max_digits=12)
     loan_closure: Optional[int] = None
     remarks: Optional[str] = None
+    ignore: bool = Field(default=False)
