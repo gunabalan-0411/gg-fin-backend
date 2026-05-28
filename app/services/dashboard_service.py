@@ -1,4 +1,3 @@
-import math
 import calendar as _cal
 from datetime import date, timedelta
 
@@ -13,26 +12,50 @@ from app.schemas.dashboard import (
 
 
 # ── IOP payment-date helpers ──────────────────────────────────────────────────
+#
+# Payment days within each calendar month are fixed:
+#   start_day, start_day + freq, start_day + 2*freq, ...
+# as long as the day number is valid for that month.
+# Exception: if the calculated day is 29 or 30 in a February that doesn't have
+# that day, the payment is moved to March 1.
 
-def _interval_days(frequency: float) -> int:
-    if not frequency or frequency <= 0:
-        return 30
-    return max(1, round(30 / float(frequency)))
+def _payment_dates_for_month(start_day: int, freq: int, year: int, month: int) -> list[date]:
+    days_in_m = _cal.monthrange(year, month)[1]
+    result = []
+    day = start_day
+    while day <= 31:
+        if day <= days_in_m:
+            result.append(date(year, month, day))
+        elif month == 2 and day in (29, 30) and day > days_in_m:
+            result.append(date(year, 3, 1))
+        day += freq
+    return result
 
 
 def _payment_dates_in_range(start: date, frequency: float, from_d: date, to_d: date) -> list[date]:
-    if to_d < start or to_d < from_d:
-        return []
-    interval = _interval_days(frequency)
-    days_to_from = max(0, (from_d - start).days)
-    first_i = math.ceil(days_to_from / interval)
-    result = []
-    d = start + timedelta(days=first_i * interval)
-    while d <= to_d:
-        if d >= from_d:
-            result.append(d)
-        d += timedelta(days=interval)
-    return result
+    start_day = start.day
+    freq = max(1, int(round(float(frequency))))
+    found: set[date] = set()
+
+    # Begin one month before from_d so February overflow dates landing on
+    # March 1 are caught when from_d falls in March.
+    cur_y = from_d.year
+    cur_m = from_d.month - 1
+    if cur_m == 0:
+        cur_y -= 1
+        cur_m = 12
+
+    end_y, end_m = to_d.year, to_d.month
+    while (cur_y, cur_m) <= (end_y, end_m):
+        for pd in _payment_dates_for_month(start_day, freq, cur_y, cur_m):
+            if from_d <= pd <= to_d:
+                found.add(pd)
+        if cur_m == 12:
+            cur_y, cur_m = cur_y + 1, 1
+        else:
+            cur_m += 1
+
+    return sorted(found)
 
 
 def _to_brief(c: dict) -> dict:
