@@ -42,6 +42,8 @@ class CustomerBrief(BaseModel):
     tamil_name: str
     loan_amount: float
     frequency: int = 1
+    monthly_interest: float = 0
+    ignore: bool = False
 
 
 class IopRemindersResponse(BaseModel):
@@ -63,6 +65,7 @@ class EdiInactiveCustomer(BaseModel):
     outstanding_balance: float
     last_payment_date: str | None
     days_since_payment: int
+    ignore: bool = False
 
 
 class EdiDefaulter(BaseModel):
@@ -73,6 +76,7 @@ class EdiDefaulter(BaseModel):
     outstanding_balance: float
     last_payment_date: str | None
     days_overdue: int
+    ignore: bool = False
 
 
 class IopMonthlyDue(BaseModel):

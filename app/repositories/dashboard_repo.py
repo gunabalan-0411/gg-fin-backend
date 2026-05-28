@@ -163,7 +163,8 @@ class DashboardRepo:
                 COALESCE(c.loan_amount, 0)::float AS loan_amount,
                 c.loan_start_date,
                 COALESCE(c.interest_payment_frequency, 1)::float AS frequency,
-                COALESCE(c.interest, 0)::float AS monthly_interest
+                COALESCE(c.interest, 0)::float AS monthly_interest,
+                COALESCE(c.ignore, false) AS ignore
             FROM tbl_iop_customer c
             LEFT JOIN tbl_iop_name_map nm ON nm.customer_id = c.customer_id
             WHERE c.loan_closure > 0
@@ -192,6 +193,7 @@ class DashboardRepo:
                 COALESCE(nm.customer_name_ta, '') AS tamil_name,
                 COALESCE(c.loan_amount, 0)::float AS loan_amount,
                 COALESCE(c.outstanding_balance, 0)::float AS outstanding_balance,
+                COALESCE(c.ignore, false) AS ignore,
                 MAX(t.collection_date) AS last_payment_date,
                 (CURRENT_DATE - COALESCE(MAX(t.collection_date), c.loan_start_date, CURRENT_DATE)) AS days_since_payment
             FROM tbl_edi_customer c
@@ -200,7 +202,7 @@ class DashboardRepo:
             LEFT JOIN tbl_edi_name_map nm ON nm.customer_id = c.customer_id
             WHERE c.outstanding_balance > 0
             GROUP BY c.customer_id, c.customer_name, nm.customer_name_ta,
-                     c.loan_amount, c.outstanding_balance, c.loan_start_date
+                     c.loan_amount, c.outstanding_balance, c.loan_start_date, c.ignore
             HAVING (CURRENT_DATE - COALESCE(MAX(t.collection_date), c.loan_start_date, CURRENT_DATE)) >= {min_days}
             ORDER BY days_since_payment DESC
         """))

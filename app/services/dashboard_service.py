@@ -65,6 +65,8 @@ def _to_brief(c: dict) -> dict:
         "tamil_name": c["tamil_name"] or "",
         "loan_amount": float(c["loan_amount"] or 0),
         "frequency": round(float(c["frequency"] or 1)),
+        "monthly_interest": float(c.get("monthly_interest") or 0),
+        "ignore": bool(c.get("ignore", False)),
     }
 
 
@@ -185,6 +187,7 @@ class DashboardService:
                 outstanding_balance=r["outstanding_balance"],
                 last_payment_date=str(r["last_payment_date"]) if r["last_payment_date"] else None,
                 days_since_payment=int(r["days_since_payment"]),
+                ignore=bool(r.get("ignore", False)),
             )
             for r in rows
         ]
@@ -200,6 +203,7 @@ class DashboardService:
                 outstanding_balance=r["outstanding_balance"],
                 last_payment_date=str(r["last_payment_date"]) if r["last_payment_date"] else None,
                 days_overdue=int(r["days_since_payment"]),
+                ignore=bool(r.get("ignore", False)),
             )
             for r in rows
         ]
