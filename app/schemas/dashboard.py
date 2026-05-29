@@ -89,3 +89,4 @@ class IopMonthlyDue(BaseModel):
     due_this_month: float
     payments_due_so_far: int
     frequency: int
+    ignore: bool = False

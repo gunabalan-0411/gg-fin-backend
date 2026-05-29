@@ -36,6 +36,7 @@ class EdiCustomerUpdate(BaseModel):
     interest: Optional[Decimal] = None
     outstanding_balance: Optional[Decimal] = None
     remarks: Optional[str] = None
+    ignore: Optional[bool] = None
 
 
 class EdiCustomerRead(EdiCustomerCreate):
@@ -75,6 +76,7 @@ class IopCustomerUpdate(BaseModel):
     interest: Optional[Decimal] = None
     loan_closure: Optional[int] = None
     remarks: Optional[str] = None
+    ignore: Optional[bool] = None
 
 
 class IopCustomerRead(IopCustomerCreate):

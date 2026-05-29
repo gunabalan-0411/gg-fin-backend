@@ -242,6 +242,7 @@ class DashboardService:
                 due_this_month=due,
                 payments_due_so_far=n_due,
                 frequency=round(freq),
+                ignore=bool(c.get("ignore", False)),
             ))
 
         dues.sort(key=lambda x: x.due_this_month, reverse=True)
