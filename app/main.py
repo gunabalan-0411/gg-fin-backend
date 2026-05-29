@@ -5,7 +5,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, backup, customers, dashboard, dataset, debts, defaulted_balances, drive, export, expenses, namemap, setup, sql, transactions, unclaimed_balances, voice, upi
+from app.api import auth, backup, customers, dashboard, dataset, debts, defaulted_balances, drive, export, expenses, investors, namemap, setup, sql, transactions, unclaimed_balances, voice, upi
 from app.core.database import init_db
 from app.core.config import settings
 
@@ -74,6 +74,7 @@ app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
 app.include_router(upi.router, prefix="/api/upi", tags=["upi"])
 app.include_router(drive.router, prefix="/api/drive", tags=["drive"])
 app.include_router(debts.router, prefix="/api/debts", tags=["debts"])
+app.include_router(investors.router, prefix="/api/investors", tags=["investors"])
 app.include_router(unclaimed_balances.router, prefix="/api/unclaimed-balances", tags=["unclaimed-balances"])
 app.include_router(defaulted_balances.router, prefix="/api/defaulted-balances", tags=["defaulted-balances"])
 app.include_router(sql.router, prefix="/api/sql", tags=["sql"])
