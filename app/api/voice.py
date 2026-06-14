@@ -6,10 +6,31 @@ from sqlmodel import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_session
-from app.services.voice_service import VoiceService, get_device_info, set_device as svc_set_device
+from app.services.voice_service import (
+    VoiceService, get_device_info, set_device as svc_set_device,
+    get_model_status, load_model as svc_load_model, unload_model as svc_unload_model,
+)
 from app.services.transaction_service import EdiTransactionService, IopTransactionService
 
 router = APIRouter()
+
+
+@router.get("/model-status")
+def model_status(_=Depends(get_current_user)):
+    """Return whether the Whisper model is currently loaded and how long it has been idle."""
+    return get_model_status()
+
+
+@router.post("/model-load")
+async def model_load(_=Depends(get_current_user)):
+    """Pre-load the Whisper model into RAM. Resets the 60s idle timer."""
+    return await run_in_threadpool(svc_load_model)
+
+
+@router.post("/model-unload")
+def model_unload(_=Depends(get_current_user)):
+    """Immediately unload the Whisper model and cancel the idle timer."""
+    return svc_unload_model()
 
 
 @router.get("/device-info")

@@ -1,6 +1,8 @@
 from __future__ import annotations
 import tempfile
 import os
+import threading
+import time
 from datetime import date
 from pathlib import Path
 
@@ -12,13 +14,62 @@ from app.utils.name_matching import get_similar_score, parse_voice_entry, parse_
 
 
 AUTO_MATCH_THRESHOLD = 90  # score >= this → auto-matched
+_IDLE_UNLOAD_SECONDS = 60   # unload model after this many seconds of inactivity
 
 # Local model directory (populated by download_model.py)
 _LOCAL_MODEL_DIR = Path("/app/models/whisper-small")
 
-# Module-level singleton — loaded once, shared across all requests
+# Module-level singleton — loaded on demand, auto-unloaded after idle
 _whisper_model = None
 _current_device: str = "cpu"  # "cpu" or "cuda"
+_last_used: float = 0.0
+_unload_timer: threading.Timer | None = None
+_timer_lock = threading.Lock()
+
+
+def _schedule_unload() -> None:
+    global _unload_timer
+    with _timer_lock:
+        if _unload_timer is not None:
+            _unload_timer.cancel()
+        t = threading.Timer(_IDLE_UNLOAD_SECONDS, _auto_unload)
+        t.daemon = True
+        t.start()
+        _unload_timer = t
+
+
+def _auto_unload() -> None:
+    global _whisper_model, _unload_timer
+    with _timer_lock:
+        _whisper_model = None
+        _unload_timer = None
+    print("[whisper] Auto-unloaded after 60s idle")
+
+
+def get_model_status() -> dict:
+    loaded = _whisper_model is not None
+    idle = int(time.time() - _last_used) if (loaded and _last_used) else 0
+    return {
+        "loaded": loaded,
+        "idle_seconds": idle,
+        "seconds_until_unload": max(0, _IDLE_UNLOAD_SECONDS - idle) if loaded else 0,
+    }
+
+
+def load_model() -> dict:
+    _get_whisper_model()
+    return get_model_status()
+
+
+def unload_model() -> dict:
+    global _whisper_model, _unload_timer
+    with _timer_lock:
+        if _unload_timer is not None:
+            _unload_timer.cancel()
+            _unload_timer = None
+        _whisper_model = None
+    print("[whisper] Manually unloaded")
+    return get_model_status()
 
 
 def _is_cuda_available() -> bool:
@@ -91,7 +142,8 @@ def set_device(device: str) -> None:
 
 
 def _get_whisper_model():
-    global _whisper_model
+    global _whisper_model, _last_used
+    _last_used = time.time()
     if _whisper_model is None:
         from faster_whisper import WhisperModel
         if _LOCAL_MODEL_DIR.exists() and any(_LOCAL_MODEL_DIR.iterdir()):
@@ -103,6 +155,7 @@ def _get_whisper_model():
         compute = "float16" if _current_device == "cuda" else "int8"
         print(f"[whisper] Loading model on device={_current_device!r} compute_type={compute!r}")
         _whisper_model = WhisperModel(model_path, device=_current_device, compute_type=compute)
+    _schedule_unload()  # reset 60s idle timer on every use
     return _whisper_model
 
 
