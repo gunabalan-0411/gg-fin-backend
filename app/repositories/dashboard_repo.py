@@ -205,7 +205,7 @@ class DashboardRepo:
                      c.loan_amount, c.outstanding_balance, c.loan_start_date, c.ignore
             HAVING (CURRENT_DATE - COALESCE(MAX(t.collection_date), c.loan_start_date, CURRENT_DATE)) >= :min_days
             ORDER BY days_since_payment DESC
-        """), {"min_days": min_days})
+        """).bindparams(min_days=min_days))
         return [dict(row._mapping) for row in result]
 
     def get_daily_activity(self, days: int = 30):
