@@ -36,6 +36,12 @@ def on_startup():
         import logging
         logging.getLogger(__name__).warning("auto_restore_on_startup skipped: %s", exc)
     _seed_admin()
+    # Download Whisper model to volume in the background if it's missing
+    try:
+        from app.services.voice_service import start_background_download
+        start_background_download()
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Whisper background download skipped: %s", exc)
 
 
 def _seed_admin():

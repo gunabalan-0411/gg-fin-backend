@@ -26,6 +26,10 @@ _last_used: float = 0.0
 _unload_timer: threading.Timer | None = None
 _timer_lock = threading.Lock()
 
+# Download state
+_download_in_progress: bool = False
+_download_lock = threading.Lock()
+
 
 def _schedule_unload() -> None:
     global _unload_timer
@@ -46,17 +50,81 @@ def _auto_unload() -> None:
     print("[whisper] Auto-unloaded after 60s idle")
 
 
+def _is_model_on_disk() -> bool:
+    return (
+        _LOCAL_MODEL_DIR.exists()
+        and any(f for f in _LOCAL_MODEL_DIR.iterdir() if f.suffix in (".bin", ".json", ".txt"))
+    )
+
+
+def _ensure_model_on_disk() -> None:
+    """Download model to volume if missing. Blocks caller; safe to call from multiple threads."""
+    global _download_in_progress
+
+    if _is_model_on_disk():
+        return
+
+    with _download_lock:
+        # Re-check after acquiring lock — another thread may have finished downloading
+        if _is_model_on_disk():
+            return
+        if _download_in_progress:
+            # Wait for the in-progress download (started by startup background thread)
+            while _download_in_progress:
+                time.sleep(1)
+            return
+
+        _download_in_progress = True
+
+    try:
+        print("[whisper] Model not on volume — downloading from HuggingFace…")
+        _LOCAL_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        from huggingface_hub import snapshot_download
+        snapshot_download(
+            repo_id="Systran/faster-whisper-small",
+            local_dir=str(_LOCAL_MODEL_DIR),
+            local_dir_use_symlinks=False,
+        )
+        print("[whisper] ✓ Model downloaded to volume")
+    except Exception as e:
+        print(f"[whisper] Download failed: {e}")
+        raise
+    finally:
+        global _download_in_progress  # noqa: F811
+        _download_in_progress = False
+
+
+def start_background_download() -> None:
+    """Call at app startup — if model is missing from volume, download in background."""
+    if _is_model_on_disk():
+        print("[whisper] Model already on volume — skipping background download")
+        return
+
+    def _bg():
+        try:
+            _ensure_model_on_disk()
+        except Exception as e:
+            print(f"[whisper] Background download failed: {e}")
+
+    t = threading.Thread(target=_bg, daemon=True)
+    t.start()
+    print("[whisper] Model missing from volume — background download started")
+
+
 def get_model_status() -> dict:
     loaded = _whisper_model is not None
     idle = int(time.time() - _last_used) if (loaded and _last_used) else 0
     return {
         "loaded": loaded,
+        "on_disk": _is_model_on_disk(),
+        "downloading": _download_in_progress,
         "idle_seconds": idle,
         "seconds_until_unload": max(0, _IDLE_UNLOAD_SECONDS - idle) if loaded else 0,
     }
 
 
 def load_model() -> dict:
+    _ensure_model_on_disk()   # download first if volume is empty
     _get_whisper_model()
     return get_model_status()
 
@@ -145,17 +213,12 @@ def _get_whisper_model():
     global _whisper_model, _last_used
     _last_used = time.time()
     if _whisper_model is None:
+        _ensure_model_on_disk()  # blocks until model is on volume (downloads if needed)
         from faster_whisper import WhisperModel
-        if _LOCAL_MODEL_DIR.exists() and any(_LOCAL_MODEL_DIR.iterdir()):
-            model_path = str(_LOCAL_MODEL_DIR)
-            print(f"[whisper] Loading model from local path: {model_path}")
-        else:
-            model_path = "small"
-            print("[whisper] Local model not found — downloading 'small' from HuggingFace")
         compute = "float16" if _current_device == "cuda" else "int8"
-        print(f"[whisper] Loading model on device={_current_device!r} compute_type={compute!r}")
-        _whisper_model = WhisperModel(model_path, device=_current_device, compute_type=compute)
-    _schedule_unload()  # reset 60s idle timer on every use
+        print(f"[whisper] Loading model from {_LOCAL_MODEL_DIR} device={_current_device!r} compute={compute!r}")
+        _whisper_model = WhisperModel(str(_LOCAL_MODEL_DIR), device=_current_device, compute_type=compute)
+    _schedule_unload()
     return _whisper_model
 
 
