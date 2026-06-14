@@ -16,8 +16,8 @@ from app.utils.name_matching import get_similar_score, parse_voice_entry, parse_
 AUTO_MATCH_THRESHOLD = 90  # score >= this → auto-matched
 _IDLE_UNLOAD_SECONDS = 60   # unload model after this many seconds of inactivity
 
-# Local model directory (populated by download_model.py)
-_LOCAL_MODEL_DIR = Path("/app/models/whisper-small")
+# Model directory — under /app/model_cache so Railway's /app/models volume doesn't shadow it
+_LOCAL_MODEL_DIR = Path("/app/model_cache/whisper-small")
 
 # Module-level singleton — loaded on demand, auto-unloaded after idle
 _whisper_model = None
