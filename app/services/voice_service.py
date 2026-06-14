@@ -240,7 +240,12 @@ class VoiceService:
                 beam_size=5,
                 language=lang,
                 vad_filter=True,
-                vad_parameters=dict(min_silence_duration_ms=500),
+                vad_parameters=dict(
+                    threshold=0.3,           # default 0.5 was too strict, lower = more speech detected
+                    min_speech_duration_ms=100,
+                    min_silence_duration_ms=500,
+                    speech_pad_ms=400,
+                ),
                 without_timestamps=True,
             )
             texts = [s.text.strip() for s in segments]
