@@ -26,7 +26,5 @@ def create_access_token(subject: Any, expires_delta: timedelta | None = None) ->
 
 
 def decode_token(token: str) -> dict:
-    try:
-        return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
-    except JWTError:
-        return {}
+    """Decode and validate JWT. Raises JWTError on any failure — never silently returns {}."""
+    return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])

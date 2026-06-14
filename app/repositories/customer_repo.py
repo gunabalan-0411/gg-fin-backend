@@ -6,6 +6,16 @@ from sqlalchemy import text
 from app.models.customer import EdiCustomer, IopCustomer
 from app.models.mapping import EdiNameMap, IopNameMap
 
+# Whitelisted columns for sorting — prevents arbitrary attribute access via sort_by param.
+_EDI_SORT_COLS = frozenset({
+    "customer_id", "customer_name", "loan_amount",
+    "outstanding_balance", "loan_start_date", "interest",
+})
+_IOP_SORT_COLS = frozenset({
+    "customer_id", "customer_name", "loan_amount",
+    "loan_closure", "loan_start_date", "interest",
+})
+
 
 class EdiCustomerRepo:
     def __init__(self, session: Session):
@@ -24,14 +34,19 @@ class EdiCustomerRepo:
     def get_all(self, skip: int = 0, limit: int = 100, search: str = "",
                 segment_id: Optional[int] = None, sort_by: str = "customer_id",
                 sort_dir: str = "asc", balance_gt_zero: bool = False):
+        if sort_by not in _EDI_SORT_COLS:
+            sort_by = "customer_id"
         query = self._base_query(search, segment_id, balance_gt_zero)
         column = getattr(EdiCustomer, sort_by, EdiCustomer.customer_id)
         query = query.order_by(column.desc() if sort_dir == "desc" else column.asc())
         return self.session.exec(query.offset(skip).limit(limit)).all()
 
     def count(self, search: str = "", segment_id: Optional[int] = None, balance_gt_zero: bool = False) -> int:
-        query = self._base_query(search, segment_id, balance_gt_zero)
-        return len(self.session.exec(query).all())
+        # Use COUNT(*) — avoids loading all rows into memory (O(1) vs O(N))
+        count_q = select(func.count()).select_from(
+            self._base_query(search, segment_id, balance_gt_zero).subquery()
+        )
+        return self.session.exec(count_q).one()
 
     def get_by_id(self, customer_id: int) -> Optional[EdiCustomer]:
         return self.session.get(EdiCustomer, customer_id)
@@ -92,28 +107,22 @@ class EdiCustomerRepo:
             return False
         self.session.delete(customer)
         self.session.flush()
-        # Delete the name_map entry for the deleted customer first
         self.session.execute(
             text("DELETE FROM tbl_edi_name_map WHERE customer_id = :cid"),
             {"cid": customer_id},
         )
-        # Re-sequence: two-step to avoid PK conflicts in PostgreSQL
-        # Step 1: negate IDs to temporary values
         self.session.execute(
             text("UPDATE tbl_edi_customer SET customer_id = -customer_id WHERE customer_id > :cid"),
             {"cid": customer_id},
         )
-        # Step 2: apply -1 and negate back
         self.session.execute(
             text("UPDATE tbl_edi_customer SET customer_id = (-customer_id) - 1 WHERE customer_id < -:cid"),
             {"cid": customer_id},
         )
-        # Transactions: customer_id is not a PK, so single step is safe
         self.session.execute(
             text("UPDATE tbl_edi_transactions SET customer_id = customer_id - 1 WHERE customer_id > :cid"),
             {"cid": customer_id},
         )
-        # Name map: two-step for PK safety
         self.session.execute(
             text("UPDATE tbl_edi_name_map SET customer_id = -customer_id WHERE customer_id > :cid"),
             {"cid": customer_id},
@@ -150,14 +159,18 @@ class IopCustomerRepo:
     def get_all(self, skip: int = 0, limit: int = 100, search: str = "",
                 segment_id: Optional[int] = None, sort_by: str = "customer_id",
                 sort_dir: str = "asc", balance_gt_zero: bool = False):
+        if sort_by not in _IOP_SORT_COLS:
+            sort_by = "customer_id"
         query = self._base_query(search, segment_id, balance_gt_zero)
         column = getattr(IopCustomer, sort_by, IopCustomer.customer_id)
         query = query.order_by(column.desc() if sort_dir == "desc" else column.asc())
         return self.session.exec(query.offset(skip).limit(limit)).all()
 
     def count(self, search: str = "", segment_id: Optional[int] = None, balance_gt_zero: bool = False) -> int:
-        query = self._base_query(search, segment_id, balance_gt_zero)
-        return len(self.session.exec(query).all())
+        count_q = select(func.count()).select_from(
+            self._base_query(search, segment_id, balance_gt_zero).subquery()
+        )
+        return self.session.exec(count_q).one()
 
     def get_by_id(self, customer_id: int) -> Optional[IopCustomer]:
         return self.session.get(IopCustomer, customer_id)
@@ -218,12 +231,10 @@ class IopCustomerRepo:
             return False
         self.session.delete(customer)
         self.session.flush()
-        # Delete the name_map entry for the deleted customer first
         self.session.execute(
             text("DELETE FROM tbl_iop_name_map WHERE customer_id = :cid"),
             {"cid": customer_id},
         )
-        # Re-sequence: two-step to avoid PK conflicts in PostgreSQL
         self.session.execute(
             text("UPDATE tbl_iop_customer SET customer_id = -customer_id WHERE customer_id > :cid"),
             {"cid": customer_id},

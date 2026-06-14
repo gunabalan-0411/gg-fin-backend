@@ -11,12 +11,17 @@ from app.core.config import settings
 
 app = FastAPI(title="GG Finance API", version="1.0.0")
 
+_ALLOWED_ORIGINS = list(filter(None, [
+    settings.FRONTEND_URL,
+    "http://localhost:3000",
+    "http://localhost:5173",
+]))
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 

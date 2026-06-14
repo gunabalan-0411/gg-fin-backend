@@ -1,5 +1,4 @@
 import time
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -9,6 +8,9 @@ from app.api.deps import get_current_user
 from app.core.database import engine
 
 router = APIRouter()
+
+_ALLOWED_PREFIXES = frozenset({"select", "with", "explain"})
+_MAX_ROWS = 500
 
 
 class QueryRequest(BaseModel):
@@ -21,30 +23,27 @@ def run_query(body: QueryRequest, _=Depends(get_current_user)):
     if not sql:
         raise HTTPException(400, "Query is empty")
 
+    first_word = sql.split()[0].lower()
+    if first_word not in _ALLOWED_PREFIXES:
+        raise HTTPException(403, "Only SELECT / WITH / EXPLAIN queries are permitted")
+
     start = time.perf_counter()
     try:
-        with engine.begin() as conn:
+        with engine.connect() as conn:          # read-only (no BEGIN/COMMIT)
             result = conn.execute(text(sql))
             elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
 
             if result.returns_rows:
                 columns = list(result.keys())
-                rows = [[str(v) if v is not None else None for v in row] for row in result.fetchall()]
+                rows = result.fetchmany(_MAX_ROWS)
                 return {
                     "columns": columns,
-                    "rows": rows,
+                    "rows": [[str(v) if v is not None else None for v in row] for row in rows],
                     "row_count": len(rows),
                     "elapsed_ms": elapsed_ms,
-                    "affected": None,
+                    "truncated": len(rows) == _MAX_ROWS,
                 }
-            else:
-                return {
-                    "columns": [],
-                    "rows": [],
-                    "row_count": 0,
-                    "elapsed_ms": elapsed_ms,
-                    "affected": result.rowcount,
-                }
+            return {"columns": [], "rows": [], "row_count": 0, "elapsed_ms": elapsed_ms}
     except Exception as exc:
         raise HTTPException(400, str(exc))
 

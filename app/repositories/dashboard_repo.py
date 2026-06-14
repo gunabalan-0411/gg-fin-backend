@@ -186,7 +186,7 @@ class DashboardRepo:
     # ── EDI inactive / defaulters ─────────────────────────────────────────────
 
     def get_edi_overdue(self, min_days: int) -> list[dict]:
-        result = self.session.exec(text(f"""
+        result = self.session.exec(text("""
             SELECT
                 c.customer_id,
                 COALESCE(c.customer_name, '') AS customer_name,
@@ -203,13 +203,13 @@ class DashboardRepo:
             WHERE c.outstanding_balance > 0
             GROUP BY c.customer_id, c.customer_name, nm.customer_name_ta,
                      c.loan_amount, c.outstanding_balance, c.loan_start_date, c.ignore
-            HAVING (CURRENT_DATE - COALESCE(MAX(t.collection_date), c.loan_start_date, CURRENT_DATE)) >= {min_days}
+            HAVING (CURRENT_DATE - COALESCE(MAX(t.collection_date), c.loan_start_date, CURRENT_DATE)) >= :min_days
             ORDER BY days_since_payment DESC
-        """))
+        """), {"min_days": min_days})
         return [dict(row._mapping) for row in result]
 
     def get_daily_activity(self, days: int = 30):
-        result = self.session.exec(text(f"""
+        result = self.session.exec(text("""
             SELECT
                 d.day::date AS date,
                 COALESCE(e.edi_count, 0) AS edi_count,
@@ -217,7 +217,7 @@ class DashboardRepo:
                 COALESCE(i.iop_count, 0) AS iop_count,
                 COALESCE(i.iop_amount, 0) AS iop_amount
             FROM generate_series(
-                CURRENT_DATE - INTERVAL '{days} days',
+                CURRENT_DATE - (:days * INTERVAL '1 day'),
                 CURRENT_DATE,
                 '1 day'
             ) d(day)
@@ -230,5 +230,5 @@ class DashboardRepo:
                 FROM tbl_iop_transactions GROUP BY collection_date
             ) i ON i.collection_date = d.day::date
             ORDER BY d.day
-        """))
+        """), {"days": days})
         return [dict(row._mapping) for row in result]
