@@ -90,7 +90,6 @@ def _ensure_model_on_disk() -> None:
         print(f"[whisper] Download failed: {e}")
         raise
     finally:
-        global _download_in_progress  # noqa: F811
         _download_in_progress = False
 
 
