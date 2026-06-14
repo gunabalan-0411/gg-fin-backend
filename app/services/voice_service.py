@@ -234,22 +234,17 @@ class VoiceService:
         with tempfile.NamedTemporaryFile(suffix=audio_suffix, delete=False) as f:
             f.write(audio_bytes)
             tmp_path = f.name
+        print(f"[whisper] audio bytes={len(audio_bytes)} suffix={audio_suffix} file={tmp_path}")
         try:
             segments, info = model.transcribe(
                 tmp_path,
                 beam_size=5,
                 language=lang,
-                vad_filter=True,
-                vad_parameters=dict(
-                    threshold=0.3,           # default 0.5 was too strict, lower = more speech detected
-                    min_speech_duration_ms=100,
-                    min_silence_duration_ms=500,
-                    speech_pad_ms=400,
-                ),
+                vad_filter=False,
                 without_timestamps=True,
             )
             texts = [s.text.strip() for s in segments]
-            print(f"[whisper] product={product} lang={lang} detected={info.language} prob={info.language_probability:.2f} segments={texts}")
+            print(f"[whisper] detected={info.language} prob={info.language_probability:.2f} segments={texts}")
             return " ".join(texts)
         finally:
             os.unlink(tmp_path)
