@@ -266,8 +266,17 @@ class VoiceService:
                 language=lang,
                 vad_filter=False,
                 without_timestamps=True,
+                condition_on_previous_text=False,
+                initial_prompt="Customer name and collection amount.",
+                no_speech_threshold=0.7,
             )
-            texts = [s.text.strip() for s in segments]
+            # Filter known Whisper hallucinations for short/noisy audio
+            _noise = {"you", "thank you", "thanks", "thanks for watching", "bye", "bye bye",
+                      "uh", "um", "hmm", "oh", "."}
+            texts = [
+                s.text.strip() for s in segments
+                if s.text.strip() and s.text.strip().lower().rstrip(".,!? ") not in _noise
+            ]
             log.info(f"[whisper] detected={info.language} prob={info.language_probability:.2f} segments={texts}")
             return " ".join(texts)
         finally:
