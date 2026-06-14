@@ -19,8 +19,8 @@ def upgrade() -> None:
     op.execute("CREATE INDEX IF NOT EXISTS ix_iop_customer_name ON tbl_iop_customer (customer_name)")
     op.execute("CREATE INDEX IF NOT EXISTS ix_edi_txn_date ON tbl_edi_transactions (collection_date)")
     op.execute("CREATE INDEX IF NOT EXISTS ix_iop_txn_date ON tbl_iop_transactions (collection_date)")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_upi_txn_date ON tbl_upi_transaction (transaction_date)")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_upi_txn_vpa  ON tbl_upi_transaction (sender_vpa)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_upi_txn_date ON tbl_upi_transactions (transaction_date)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_upi_txn_vpa  ON tbl_upi_transactions (sender_vpa)")
 
 
 def downgrade() -> None:
@@ -31,3 +31,4 @@ def downgrade() -> None:
     op.execute("DROP INDEX IF EXISTS ix_iop_txn_date")
     op.execute("DROP INDEX IF EXISTS ix_upi_txn_date")
     op.execute("DROP INDEX IF EXISTS ix_upi_txn_vpa")
+
