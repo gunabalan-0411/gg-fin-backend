@@ -1,10 +1,13 @@
 from __future__ import annotations
+import logging
 import tempfile
 import os
 import threading
 import time
 from datetime import date
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 from sqlmodel import Session, select, col
 
@@ -14,7 +17,7 @@ from app.utils.name_matching import get_similar_score, parse_voice_entry, parse_
 
 
 AUTO_MATCH_THRESHOLD = 90  # score >= this → auto-matched
-_IDLE_UNLOAD_SECONDS = 60   # unload model after this many seconds of inactivity
+_IDLE_UNLOAD_SECONDS = 300  # unload model after 5 min of inactivity
 
 # Model directory — under /app/model_cache so Railway's /app/models volume doesn't shadow it
 _LOCAL_MODEL_DIR = Path("/app/model_cache/whisper-small")
@@ -29,6 +32,8 @@ _timer_lock = threading.Lock()
 # Download state
 _download_in_progress: bool = False
 _download_lock = threading.Lock()
+_EXPECTED_MODEL_BYTES = 490_000_000  # ~480 MB for faster-whisper-small
+_download_progress: float = 0.0  # 0.0–1.0
 
 
 def _schedule_unload() -> None:
@@ -47,7 +52,7 @@ def _auto_unload() -> None:
     with _timer_lock:
         _whisper_model = None
         _unload_timer = None
-    print("[whisper] Auto-unloaded after 60s idle")
+    log.info("[whisper] Auto-unloaded after 60s idle")
 
 
 def _is_model_on_disk() -> bool:
@@ -59,7 +64,7 @@ def _is_model_on_disk() -> bool:
 
 def _ensure_model_on_disk() -> None:
     """Download model to volume if missing. Blocks caller; safe to call from multiple threads."""
-    global _download_in_progress
+    global _download_in_progress, _download_progress
 
     if _is_model_on_disk():
         return
@@ -75,9 +80,23 @@ def _ensure_model_on_disk() -> None:
             return
 
         _download_in_progress = True
+        _download_progress = 0.0
+
+    def _poll_progress() -> None:
+        global _download_progress
+        while _download_in_progress:
+            try:
+                if _LOCAL_MODEL_DIR.exists():
+                    downloaded = sum(f.stat().st_size for f in _LOCAL_MODEL_DIR.rglob("*") if f.is_file())
+                    _download_progress = min(downloaded / _EXPECTED_MODEL_BYTES, 0.95)
+            except Exception:
+                pass
+            time.sleep(2)
+
+    threading.Thread(target=_poll_progress, daemon=True).start()
 
     try:
-        print("[whisper] Model not on volume — downloading from HuggingFace…")
+        log.info("[whisper] Model not on volume — downloading from HuggingFace…")
         _LOCAL_MODEL_DIR.mkdir(parents=True, exist_ok=True)
         from huggingface_hub import snapshot_download
         snapshot_download(
@@ -85,29 +104,33 @@ def _ensure_model_on_disk() -> None:
             local_dir=str(_LOCAL_MODEL_DIR),
             local_dir_use_symlinks=False,
         )
-        print("[whisper] ✓ Model downloaded to volume")
+        _download_progress = 1.0
+        log.info("[whisper] ✓ Model downloaded to volume")
     except Exception as e:
-        print(f"[whisper] Download failed: {e}")
+        log.warning(f"[whisper] Download failed: {e}")
         raise
     finally:
         _download_in_progress = False
 
 
 def start_background_download() -> None:
-    """Call at app startup — if model is missing from volume, download in background."""
+    """Call at app startup — if model is missing from volume, download in background then auto-load."""
     if _is_model_on_disk():
-        print("[whisper] Model already on volume — skipping background download")
+        log.info("[whisper] Model already on volume — skipping background download")
         return
 
     def _bg():
         try:
             _ensure_model_on_disk()
+            log.info("[whisper] Download complete — auto-loading into RAM…")
+            _get_whisper_model()
+            log.info("[whisper] Model ready in RAM")
         except Exception as e:
-            print(f"[whisper] Background download failed: {e}")
+            log.warning(f"[whisper] Background download/load failed: {e}")
 
     t = threading.Thread(target=_bg, daemon=True)
     t.start()
-    print("[whisper] Model missing from volume — background download started")
+    log.info("[whisper] Model missing from volume — background download started")
 
 
 def get_model_status() -> dict:
@@ -117,6 +140,7 @@ def get_model_status() -> dict:
         "loaded": loaded,
         "on_disk": _is_model_on_disk(),
         "downloading": _download_in_progress,
+        "download_progress": round(_download_progress * 100),
         "idle_seconds": idle,
         "seconds_until_unload": max(0, _IDLE_UNLOAD_SECONDS - idle) if loaded else 0,
     }
@@ -135,7 +159,7 @@ def unload_model() -> dict:
             _unload_timer.cancel()
             _unload_timer = None
         _whisper_model = None
-    print("[whisper] Manually unloaded")
+    log.info("[whisper] Manually unloaded")
     return get_model_status()
 
 
@@ -205,7 +229,7 @@ def set_device(device: str) -> None:
         return
     _current_device = device
     _whisper_model = None  # force reload on next request
-    print(f"[whisper] Device switched to {device!r} — model will reload on next transcription")
+    log.info(f"[whisper] Device switched to {device!r} — model will reload on next transcription")
 
 
 def _get_whisper_model():
@@ -215,7 +239,7 @@ def _get_whisper_model():
         _ensure_model_on_disk()  # blocks until model is on volume (downloads if needed)
         from faster_whisper import WhisperModel
         compute = "float16" if _current_device == "cuda" else "int8"
-        print(f"[whisper] Loading model from {_LOCAL_MODEL_DIR} device={_current_device!r} compute={compute!r}")
+        log.info(f"[whisper] Loading model from {_LOCAL_MODEL_DIR} device={_current_device!r} compute={compute!r}")
         _whisper_model = WhisperModel(str(_LOCAL_MODEL_DIR), device=_current_device, compute_type=compute)
     _schedule_unload()
     return _whisper_model
@@ -234,7 +258,7 @@ class VoiceService:
         with tempfile.NamedTemporaryFile(suffix=audio_suffix, delete=False) as f:
             f.write(audio_bytes)
             tmp_path = f.name
-        print(f"[whisper] audio bytes={len(audio_bytes)} suffix={audio_suffix} file={tmp_path}")
+        log.info(f"[whisper] audio bytes={len(audio_bytes)} suffix={audio_suffix} file={tmp_path}")
         try:
             segments, info = model.transcribe(
                 tmp_path,
@@ -244,7 +268,7 @@ class VoiceService:
                 without_timestamps=True,
             )
             texts = [s.text.strip() for s in segments]
-            print(f"[whisper] detected={info.language} prob={info.language_probability:.2f} segments={texts}")
+            log.info(f"[whisper] detected={info.language} prob={info.language_probability:.2f} segments={texts}")
             return " ".join(texts)
         finally:
             os.unlink(tmp_path)
