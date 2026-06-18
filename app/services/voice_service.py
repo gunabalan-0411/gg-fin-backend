@@ -19,8 +19,12 @@ from app.utils.name_matching import get_similar_score, parse_voice_entry, parse_
 AUTO_MATCH_THRESHOLD = 90  # score >= this → auto-matched
 _IDLE_UNLOAD_SECONDS = 300  # unload model after 5 min of inactivity
 
-# Model directory — under /app/model_cache so Railway's /app/models volume doesn't shadow it
-_LOCAL_MODEL_DIR = Path("/app/model_cache/whisper-small")
+_MODEL_SIZE = "small"  # faster-whisper resolves this to its own HF repo internally
+_DRIVE_MODEL_FOLDER = ["gg_fin", "voice_model"]  # My Drive → gg_fin → voice_model
+
+# Local on-disk cache for the currently running container — ephemeral (no Railway
+# volume needed); Google Drive is now the persistent store across deploys/restarts.
+_LOCAL_MODEL_DIR = Path("/app/model_cache")
 
 # Module-level singleton — loaded on demand, auto-unloaded after idle
 _whisper_model = None
@@ -56,10 +60,146 @@ def _auto_unload() -> None:
 
 
 def _is_model_on_disk() -> bool:
-    return (
-        _LOCAL_MODEL_DIR.exists()
-        and any(f for f in _LOCAL_MODEL_DIR.iterdir() if f.suffix in (".bin", ".json", ".txt"))
-    )
+    return (_LOCAL_MODEL_DIR / "model.bin").exists()
+
+
+def _get_drive_service_for_model():
+    """Build an authenticated Drive client using the existing DriveSettings tokens
+    (the same Google account already connected for DB backups in Settings)."""
+    from sqlmodel import Session as _Session
+    from app.core.database import engine
+    from app.models.upi import DriveSettings
+    from app.services.drive_service import _build_drive_service
+
+    with _Session(engine) as session:
+        d = session.get(DriveSettings, 1)
+        if not d or not d.refresh_token:
+            raise RuntimeError("Google Drive not connected — connect Drive in Settings first.")
+        return _build_drive_service(d, session)
+
+
+def _download_model_from_drive() -> bool:
+    """Download model files from Drive's gg_fin/voice_model folder. Returns False if not present there."""
+    from app.services.drive_service import _get_folder_by_path
+    from googleapiclient.http import MediaIoBaseDownload  # type: ignore
+
+    service = _get_drive_service_for_model()
+    folder_id = _get_folder_by_path(service, _DRIVE_MODEL_FOLDER)
+
+    results = service.files().list(
+        q=f"'{folder_id}' in parents and trashed=false",
+        fields="files(id, name, size)",
+        pageSize=20,
+    ).execute()
+    files = results.get("files", [])
+    if not any(f["name"] == "model.bin" for f in files):
+        return False
+
+    _LOCAL_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    for f in files:
+        dest = _LOCAL_MODEL_DIR / f["name"]
+        request = service.files().get_media(fileId=f["id"])
+        with open(dest, "wb") as out:
+            downloader = MediaIoBaseDownload(out, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+        log.info(f"[whisper] Downloaded {f['name']} from Drive (gg_fin/voice_model)")
+    return True
+
+
+def _upload_model_to_drive() -> None:
+    """Upload the locally-cached model files to Drive's gg_fin/voice_model folder."""
+    from app.services.drive_service import _get_folder_by_path
+    from googleapiclient.http import MediaFileUpload  # type: ignore
+
+    service = _get_drive_service_for_model()
+    folder_id = _get_folder_by_path(service, _DRIVE_MODEL_FOLDER)
+
+    existing = service.files().list(
+        q=f"'{folder_id}' in parents and trashed=false",
+        fields="files(name)", pageSize=20,
+    ).execute().get("files", [])
+    existing_names = {f["name"] for f in existing}
+
+    for f in _LOCAL_MODEL_DIR.iterdir():
+        if not f.is_file() or f.name in existing_names:
+            continue
+        media = MediaFileUpload(str(f), resumable=True)
+        service.files().create(
+            body={"name": f.name, "parents": [folder_id]},
+            media_body=media,
+            fields="id",
+        ).execute()
+        log.info(f"[whisper] Uploaded {f.name} to Drive (gg_fin/voice_model)")
+
+
+def _flatten_hf_snapshot(snapshot_dir: str) -> None:
+    """Copy the resolved HF snapshot files into the flat _LOCAL_MODEL_DIR."""
+    import shutil
+    for f in Path(snapshot_dir).iterdir():
+        if f.is_file():
+            shutil.copy2(f, _LOCAL_MODEL_DIR / f.name)
+
+
+def _delete_model_from_drive() -> int:
+    """Delete all files in Drive's gg_fin/voice_model folder. Returns count deleted."""
+    from app.services.drive_service import _get_folder_by_path
+
+    service = _get_drive_service_for_model()
+    folder_id = _get_folder_by_path(service, _DRIVE_MODEL_FOLDER)
+    results = service.files().list(
+        q=f"'{folder_id}' in parents and trashed=false",
+        fields="files(id, name)", pageSize=20,
+    ).execute()
+    files = results.get("files", [])
+    for f in files:
+        service.files().delete(fileId=f["id"]).execute()
+        log.info(f"[whisper] Deleted {f['name']} from Drive (gg_fin/voice_model)")
+    return len(files)
+
+
+def reset_model_from_huggingface() -> dict:
+    """User-confirmed recovery action: wipe the cached model (local disk + Drive),
+    re-download a fresh copy from HuggingFace, and re-upload it to Drive."""
+    global _whisper_model, _download_in_progress, _download_progress
+    import shutil
+
+    with _timer_lock:
+        _whisper_model = None  # force unload of the (possibly broken) model
+
+    with _download_lock:
+        if _download_in_progress:
+            raise RuntimeError("A model download is already in progress — try again shortly.")
+        _download_in_progress = True
+        _download_progress = 0.0
+
+    deleted_from_drive = 0
+    try:
+        log.warning("[whisper] Resetting model — wiping local cache and Drive copy, re-fetching from HuggingFace…")
+        if _LOCAL_MODEL_DIR.exists():
+            shutil.rmtree(_LOCAL_MODEL_DIR, ignore_errors=True)
+        _LOCAL_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+        try:
+            deleted_from_drive = _delete_model_from_drive()
+        except Exception as e:
+            log.warning(f"[whisper] Could not clear Drive folder before reset: {e}")
+
+        from faster_whisper.utils import download_model
+        hf_cache = str(_LOCAL_MODEL_DIR / "_hf_cache")
+        snapshot_dir = download_model(_MODEL_SIZE, cache_dir=hf_cache)
+        _flatten_hf_snapshot(snapshot_dir)
+        shutil.rmtree(hf_cache, ignore_errors=True)
+
+        _upload_model_to_drive()
+        _download_progress = 1.0
+        log.info("[whisper] ✓ Model reset complete — fresh copy on disk and Drive")
+    finally:
+        _download_in_progress = False
+
+    _get_whisper_model()
+    return {"deleted_from_drive": deleted_from_drive, **get_model_status()}
 
 
 def _ensure_model_on_disk() -> None:
@@ -96,16 +236,31 @@ def _ensure_model_on_disk() -> None:
     threading.Thread(target=_poll_progress, daemon=True).start()
 
     try:
-        log.info("[whisper] Model not on volume — downloading from HuggingFace…")
         _LOCAL_MODEL_DIR.mkdir(parents=True, exist_ok=True)
-        from huggingface_hub import snapshot_download
-        snapshot_download(
-            repo_id="Systran/faster-whisper-small",
-            local_dir=str(_LOCAL_MODEL_DIR),
-            local_dir_use_symlinks=False,
-        )
+
+        found_on_drive = False
+        try:
+            log.info("[whisper] Checking Google Drive (gg_fin/voice_model) for cached model…")
+            found_on_drive = _download_model_from_drive()
+        except Exception as e:
+            log.warning(f"[whisper] Drive lookup/download failed, falling back to HuggingFace: {e}")
+
+        if not found_on_drive:
+            log.info("[whisper] Model not on Drive — downloading from HuggingFace…")
+            from faster_whisper.utils import download_model
+            hf_cache = str(_LOCAL_MODEL_DIR / "_hf_cache")
+            snapshot_dir = download_model(_MODEL_SIZE, cache_dir=hf_cache)
+            _flatten_hf_snapshot(snapshot_dir)
+            import shutil
+            shutil.rmtree(hf_cache, ignore_errors=True)
+            try:
+                log.info("[whisper] Uploading model to Drive (gg_fin/voice_model) for next time…")
+                _upload_model_to_drive()
+            except Exception as e:
+                log.warning(f"[whisper] Could not upload model to Drive (will re-download from HF next restart): {e}")
+
         _download_progress = 1.0
-        log.info("[whisper] ✓ Model downloaded to volume")
+        log.info("[whisper] ✓ Model ready on disk")
     except Exception as e:
         log.warning(f"[whisper] Download failed: {e}")
         raise
@@ -114,9 +269,9 @@ def _ensure_model_on_disk() -> None:
 
 
 def start_background_download() -> None:
-    """Call at app startup — if model is missing from volume, download in background then auto-load."""
+    """Call at app startup — if model is missing locally, fetch it (from Drive, or HF as fallback) then auto-load."""
     if _is_model_on_disk():
-        log.info("[whisper] Model already on volume — skipping background download")
+        log.info("[whisper] Model already on local disk — skipping background download")
         return
 
     def _bg():
@@ -130,7 +285,7 @@ def start_background_download() -> None:
 
     t = threading.Thread(target=_bg, daemon=True)
     t.start()
-    log.info("[whisper] Model missing from volume — background download started")
+    log.info("[whisper] Model missing locally — background fetch started")
 
 
 def get_model_status() -> dict:
@@ -236,7 +391,7 @@ def _get_whisper_model():
     global _whisper_model, _last_used
     _last_used = time.time()
     if _whisper_model is None:
-        _ensure_model_on_disk()  # blocks until model is on volume (downloads if needed)
+        _ensure_model_on_disk()  # blocks until model is on local disk (fetches from Drive/HF if needed)
         from faster_whisper import WhisperModel
         compute = "float16" if _current_device == "cuda" else "int8"
         log.info(f"[whisper] Loading model from {_LOCAL_MODEL_DIR} device={_current_device!r} compute={compute!r}")
@@ -264,19 +419,11 @@ class VoiceService:
                 tmp_path,
                 beam_size=5,
                 language=lang,
-                vad_filter=False,
+                vad_filter=True,
+                vad_parameters=dict(min_silence_duration_ms=300),
                 without_timestamps=True,
-                condition_on_previous_text=False,
-                initial_prompt="Customer name and collection amount.",
-                no_speech_threshold=0.7,
             )
-            # Filter known Whisper hallucinations for short/noisy audio
-            _noise = {"you", "thank you", "thanks", "thanks for watching", "bye", "bye bye",
-                      "uh", "um", "hmm", "oh", "."}
-            texts = [
-                s.text.strip() for s in segments
-                if s.text.strip() and s.text.strip().lower().rstrip(".,!? ") not in _noise
-            ]
+            texts = [s.text.strip() for s in segments]
             log.info(f"[whisper] detected={info.language} prob={info.language_probability:.2f} segments={texts}")
             return " ".join(texts)
         finally:

@@ -79,6 +79,20 @@ def drive_disconnect(
     return {"ok": True}
 
 
+@router.post("/refresh")
+def drive_refresh(
+    session: Session = Depends(get_session),
+    _=Depends(get_current_user),
+):
+    """Force-refresh the Drive access token using the stored refresh token."""
+    try:
+        return drive_service.force_refresh_token(session)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/export")
 def drive_export(
     session: Session = Depends(get_session),

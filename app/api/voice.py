@@ -9,6 +9,7 @@ from app.core.database import get_session
 from app.services.voice_service import (
     VoiceService, get_device_info, set_device as svc_set_device,
     get_model_status, load_model as svc_load_model, unload_model as svc_unload_model,
+    reset_model_from_huggingface,
 )
 from app.services.transaction_service import EdiTransactionService, IopTransactionService
 
@@ -31,6 +32,19 @@ async def model_load(_=Depends(get_current_user)):
 def model_unload(_=Depends(get_current_user)):
     """Immediately unload the Whisper model and cancel the idle timer."""
     return svc_unload_model()
+
+
+@router.post("/model-reset")
+async def model_reset(_=Depends(get_current_user)):
+    """User-confirmed: wipe the cached model (local + Drive) and re-download fresh
+    from HuggingFace, then re-upload it to Drive. Use when the Drive-cached model
+    is suspected corrupt or won't load."""
+    try:
+        return await run_in_threadpool(reset_model_from_huggingface)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/device-info")

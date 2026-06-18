@@ -107,6 +107,41 @@ def disconnect(session: Session) -> None:
         session.commit()
 
 
+def force_refresh_token(session: Session) -> dict:
+    """Force-refresh the Drive access token using the stored refresh token.
+    Useful as a manual recovery step if Drive calls start failing with auth errors."""
+    from google.oauth2.credentials import Credentials  # type: ignore
+    from google.auth.transport.requests import Request  # type: ignore
+
+    d = session.get(DriveSettings, 1)
+    if not d or not d.refresh_token:
+        raise ValueError("Google Drive not connected.")
+
+    expiry = d.token_expiry
+    if expiry is not None and expiry.tzinfo is not None:
+        expiry = expiry.replace(tzinfo=None)
+
+    creds = Credentials(
+        token=d.access_token,
+        refresh_token=d.refresh_token,
+        token_uri=_GOOGLE_TOKEN_URI,
+        client_id=settings.GOOGLE_CLIENT_ID,
+        client_secret=settings.GOOGLE_CLIENT_SECRET,
+        scopes=_DRIVE_SCOPES,
+        expiry=expiry,
+    )
+    try:
+        creds.refresh(Request())
+    except Exception as e:
+        raise RuntimeError(f"Token refresh failed — please reconnect Google Drive. ({e})") from e
+
+    d.access_token = creds.token
+    d.token_expiry = creds.expiry
+    session.add(d)
+    session.commit()
+    return {"refreshed": True, "expiry": creds.expiry.isoformat() if creds.expiry else None}
+
+
 def _build_drive_service(d: DriveSettings, session: Session):
     try:
         from google.oauth2.credentials import Credentials  # type: ignore
