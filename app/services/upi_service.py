@@ -395,6 +395,65 @@ def _parse_email_credit(body: str) -> Optional[UpiTransaction]:
     return None
 
 
+# ── Gmail debug ───────────────────────────────────────────────────────────────
+
+def debug_gmail_emails(session: Session, limit: int = 20) -> dict:
+    """
+    Fetch the last `limit` HDFC emails (broad query — no 'credited' filter)
+    and return raw bodies + regex match results so broken formats can be spotted.
+    """
+    g = session.get(GmailSettings, 1)
+    if not g or not g.access_token:
+        raise ValueError("Gmail not connected.")
+
+    gmail = _build_gmail_service(g, session)
+
+    # Broad query — just HDFC sender, no keyword filter, last 90 days
+    after_date = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y/%m/%d")
+    query = f"from:hdfcbank after:{after_date}"
+
+    page = gmail.users().messages().list(userId="me", q=query, maxResults=limit).execute()
+    messages = page.get("messages", [])
+
+    results = []
+    for msg_ref in messages:
+        msg = gmail.users().messages().get(
+            userId="me", id=msg_ref["id"], format="full"
+        ).execute()
+
+        body = _extract_body(msg)
+
+        matched_old = bool(_EMAIL_CREDIT_OLD.search(body)) if body else False
+        matched_new = bool(_EMAIL_CREDIT_NEW.search(body)) if body else False
+
+        # Pull the subject from headers for context
+        headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
+        subject = headers.get("Subject", "")
+        date_hdr = headers.get("Date", "")
+
+        results.append({
+            "msg_id": msg_ref["id"],
+            "subject": subject,
+            "date_header": date_hdr,
+            "matched_old_regex": matched_old,
+            "matched_new_regex": matched_new,
+            "matched_any": matched_old or matched_new,
+            # First 1200 chars of the body — enough to see the format
+            "body_preview": body[:1200] if body else "(no body extracted)",
+        })
+
+    matched   = sum(1 for r in results if r["matched_any"])
+    unmatched = len(results) - matched
+
+    return {
+        "query_used": query,
+        "total_fetched": len(results),
+        "matched": matched,
+        "unmatched": unmatched,
+        "emails": results,
+    }
+
+
 # ── CSV import ────────────────────────────────────────────────────────────────
 
 def import_csv(content: bytes, session: Session) -> dict:

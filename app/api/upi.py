@@ -87,6 +87,24 @@ def gmail_disconnect(
     return {"ok": True}
 
 
+@router.get("/gmail/debug-emails")
+def gmail_debug_emails(
+    limit: int = Query(default=20, ge=1, le=50),
+    session: Session = Depends(get_session),
+    _=Depends(get_current_user),
+):
+    """
+    Fetch last `limit` HDFC emails (broad query, last 90 days) and return
+    raw body previews + regex match status. Use this to diagnose missing formats.
+    """
+    try:
+        return upi_service.debug_gmail_emails(session, limit=limit)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/gmail/sync")
 def gmail_sync(
     session: Session = Depends(get_session),
