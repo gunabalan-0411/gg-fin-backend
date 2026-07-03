@@ -431,6 +431,27 @@ def debug_gmail_emails(session: Session, limit: int = 20) -> dict:
         subject = headers.get("Subject", "")
         date_hdr = headers.get("Date", "")
 
+        # Also attempt full parse to confirm extracted values
+        parsed = None
+        if body and (matched_old or matched_new):
+            txn = _parse_email_credit(body)
+            if txn:
+                parsed = {
+                    "amount": str(txn.amount),
+                    "date": txn.transaction_date.isoformat() if txn.transaction_date else None,
+                    "sender_vpa": txn.sender_vpa,
+                    "sender_name": txn.sender_name,
+                    "upi_ref_no": txn.upi_ref_no,
+                }
+
+        # Find the meaningful part of the body (skip CSS/HTML noise)
+        body_snippet = ""
+        if body:
+            idx = body.find("credited")
+            if idx == -1:
+                idx = body.find("Credited")
+            body_snippet = body[max(0, idx - 50): idx + 600] if idx != -1 else body[:600]
+
         results.append({
             "msg_id": msg_ref["id"],
             "subject": subject,
@@ -438,17 +459,19 @@ def debug_gmail_emails(session: Session, limit: int = 20) -> dict:
             "matched_old_regex": matched_old,
             "matched_new_regex": matched_new,
             "matched_any": matched_old or matched_new,
-            # First 1200 chars of the body — enough to see the format
-            "body_preview": body[:1200] if body else "(no body extracted)",
+            "parsed": parsed,
+            "body_snippet": body_snippet or "(no body extracted)",
         })
 
     matched   = sum(1 for r in results if r["matched_any"])
+    parse_ok  = sum(1 for r in results if r.get("parsed"))
     unmatched = len(results) - matched
 
     return {
         "query_used": query,
         "total_fetched": len(results),
         "matched": matched,
+        "parse_ok": parse_ok,
         "unmatched": unmatched,
         "emails": results,
     }
