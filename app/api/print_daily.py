@@ -27,19 +27,20 @@ _FONTS_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "fonts")
 _TAMIL_FONT_FILE = "NotoSansTamil-Regular.ttf"
 _TAMIL_FONT_PATH = os.path.join(_FONTS_DIR, _TAMIL_FONT_FILE)
 
-# ── Colours (clean spreadsheet theme) ─────────────────────────────────────────
-_C_HEADER_BG   = "#02B15A"   # brand green for column-header row
-_C_HEADER_FG   = "#ffffff"
-_C_GRP_BG      = "#F0F0F0"   # light gray for group-name rows
-_C_GRP_FG      = "#111111"
-_C_ROW_ALT     = "#F8F9FA"   # very light alternate row
+# ── Colours — "My Investments & Savings.xlsx" Office theme ────────────────────
+# dk2=#44546A  lt2=#E7E6E6  accent3=#A5A5A5  accent6=#70AD47
+_C_HEADER_BG   = "#44546A"   # dk2 — dark steel-blue column-header row
+_C_HEADER_FG   = "#FFFFFF"
+_C_GRP_BG      = "#70AD47"   # accent6 — Office green group-name rows
+_C_GRP_FG      = "#FFFFFF"
+_C_ROW_ALT     = "#F2F2F2"   # lt2 slightly darkened
 _C_ROW_EVEN    = "#FFFFFF"
-_C_BORDER      = "#D5D5D5"
-_C_TOTAL_BG    = "#E8F5EE"   # light mint for total row
-_C_DATE        = "#111111"
-_C_MUTED       = "#6B7280"
-_C_DUE_BG      = "#E8F5EE"   # due-day marker background
-_C_DUE_FG      = "#02B15A"
+_C_BORDER      = "#BFBFBF"   # thin gray (dk1 tint -0.25)
+_C_TOTAL_BG    = "#E7E6E6"   # lt2 — very light warm gray total row
+_C_DATE        = "#44546A"   # dk2 for headings
+_C_MUTED       = "#7F7F7F"   # muted text
+_C_DUE_BG      = "#C6DEB5"   # accent6 tint +0.60 — light green
+_C_DUE_FG      = "#375523"   # accent6 tint -0.50 — dark green
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -142,7 +143,7 @@ def edi_daily_print(
         FROM tbl_edi_customer c
         LEFT JOIN tbl_edi_name_map nm  ON nm.customer_id = c.customer_id
         LEFT JOIN tbl_edi_group_map gm ON gm.customer_segment_id = c.customer_segment_id
-        WHERE c.outstanding_balance > 0 AND COALESCE(c.ignore, false) = false
+        WHERE c.is_closed = false AND COALESCE(c.ignore, false) = false
         ORDER BY c.customer_segment_id ASC NULLS LAST, c.loan_start_date ASC, c.customer_id ASC
     """)).fetchall()
 
@@ -181,7 +182,7 @@ def edi_daily_print(
         if last_paid:
             days_ago = (today - last_paid).days
             days_str = str(days_ago)
-            days_color = "#DC2626" if days_ago > 7 else (_C_DATE if days_ago > 3 else "#059669")
+            days_color = "#DC2626" if days_ago > 7 else (_C_MUTED if days_ago > 3 else _C_GRP_BG)
         else:
             days_str  = "—"
             days_color = _C_MUTED
@@ -323,7 +324,7 @@ def iop_daily_print(
         FROM tbl_iop_customer c
         LEFT JOIN tbl_iop_name_map nm  ON nm.customer_id = c.customer_id
         LEFT JOIN tbl_iop_group_map gm ON gm.customer_segment_id = c.customer_segment_id
-        WHERE c.outstanding_balance > 0 AND COALESCE(c.ignore, false) = false
+        WHERE c.is_closed = false AND COALESCE(c.ignore, false) = false
         ORDER BY c.customer_segment_id ASC NULLS LAST, c.loan_start_date ASC, c.customer_id ASC
     """)).fetchall()
 
