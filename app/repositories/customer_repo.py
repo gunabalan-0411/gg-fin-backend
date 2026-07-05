@@ -21,30 +21,30 @@ class EdiCustomerRepo:
     def __init__(self, session: Session):
         self.session = session
 
-    def _base_query(self, search: str = "", segment_id: Optional[int] = None, balance_gt_zero: bool = False):
+    def _base_query(self, search: str = "", segment_id: Optional[int] = None, active_only: bool = False):
         query = select(EdiCustomer)
         if search:
             query = query.where(col(EdiCustomer.customer_name).ilike(f"%{search}%"))
         if segment_id is not None:
             query = query.where(EdiCustomer.customer_segment_id == segment_id)
-        if balance_gt_zero:
-            query = query.where(col(EdiCustomer.outstanding_balance) > 0)
+        if active_only:
+            query = query.where(EdiCustomer.is_closed == False)  # noqa: E712
         return query
 
     def get_all(self, skip: int = 0, limit: int = 100, search: str = "",
                 segment_id: Optional[int] = None, sort_by: str = "customer_id",
-                sort_dir: str = "asc", balance_gt_zero: bool = False):
+                sort_dir: str = "asc", active_only: bool = False):
         if sort_by not in _EDI_SORT_COLS:
             sort_by = "customer_id"
-        query = self._base_query(search, segment_id, balance_gt_zero)
+        query = self._base_query(search, segment_id, active_only)
         column = getattr(EdiCustomer, sort_by, EdiCustomer.customer_id)
         query = query.order_by(column.desc() if sort_dir == "desc" else column.asc())
         return self.session.exec(query.offset(skip).limit(limit)).all()
 
-    def count(self, search: str = "", segment_id: Optional[int] = None, balance_gt_zero: bool = False) -> int:
+    def count(self, search: str = "", segment_id: Optional[int] = None, active_only: bool = False) -> int:
         # Use COUNT(*) — avoids loading all rows into memory (O(1) vs O(N))
         count_q = select(func.count()).select_from(
-            self._base_query(search, segment_id, balance_gt_zero).subquery()
+            self._base_query(search, segment_id, active_only).subquery()
         )
         return self.session.exec(count_q).one()
 
@@ -146,29 +146,29 @@ class IopCustomerRepo:
     def __init__(self, session: Session):
         self.session = session
 
-    def _base_query(self, search: str = "", segment_id: Optional[int] = None, balance_gt_zero: bool = False):
+    def _base_query(self, search: str = "", segment_id: Optional[int] = None, active_only: bool = False):
         query = select(IopCustomer)
         if search:
             query = query.where(col(IopCustomer.customer_name).ilike(f"%{search}%"))
         if segment_id is not None:
             query = query.where(IopCustomer.customer_segment_id == segment_id)
-        if balance_gt_zero:
-            query = query.where(col(IopCustomer.outstanding_balance) > 0)
+        if active_only:
+            query = query.where(IopCustomer.is_closed == False)  # noqa: E712
         return query
 
     def get_all(self, skip: int = 0, limit: int = 100, search: str = "",
                 segment_id: Optional[int] = None, sort_by: str = "customer_id",
-                sort_dir: str = "asc", balance_gt_zero: bool = False):
+                sort_dir: str = "asc", active_only: bool = False):
         if sort_by not in _IOP_SORT_COLS:
             sort_by = "customer_id"
-        query = self._base_query(search, segment_id, balance_gt_zero)
+        query = self._base_query(search, segment_id, active_only)
         column = getattr(IopCustomer, sort_by, IopCustomer.customer_id)
         query = query.order_by(column.desc() if sort_dir == "desc" else column.asc())
         return self.session.exec(query.offset(skip).limit(limit)).all()
 
-    def count(self, search: str = "", segment_id: Optional[int] = None, balance_gt_zero: bool = False) -> int:
+    def count(self, search: str = "", segment_id: Optional[int] = None, active_only: bool = False) -> int:
         count_q = select(func.count()).select_from(
-            self._base_query(search, segment_id, balance_gt_zero).subquery()
+            self._base_query(search, segment_id, active_only).subquery()
         )
         return self.session.exec(count_q).one()
 

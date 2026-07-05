@@ -75,11 +75,11 @@ async def extract_page(
     session: Session = Depends(get_session),
     _=Depends(get_current_user),
 ):
-    # EDI: only customers with outstanding_balance > 0, using English name map
+    # EDI: only open accounts, using English name map
     edi_active = {
         c.customer_id
         for c in session.exec(
-            select(EdiCustomer).where(col(EdiCustomer.outstanding_balance) > 0)
+            select(EdiCustomer).where(EdiCustomer.is_closed == False)  # noqa: E712
         ).all()
     }
     edi_list = [
@@ -88,11 +88,11 @@ async def extract_page(
         if r.customer_id in edi_active and r.customer_name_en
     ]
 
-    # IOP: only customers with outstanding_balance > 0, using English name map
+    # IOP: only open accounts, using English name map
     iop_active = {
         c.customer_id
         for c in session.exec(
-            select(IopCustomer).where(col(IopCustomer.outstanding_balance) > 0)
+            select(IopCustomer).where(IopCustomer.is_closed == False)  # noqa: E712
         ).all()
     }
     iop_list = [

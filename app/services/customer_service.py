@@ -16,11 +16,11 @@ class EdiCustomerService:
         self.repo = EdiCustomerRepo(session)
 
     def list(self, skip: int, limit: int, search: str, segment_id: Optional[int],
-             sort_by: str = "customer_id", sort_dir: str = "asc", balance_gt_zero: bool = False):
-        return self.repo.get_all(skip, limit, search, segment_id, sort_by, sort_dir, balance_gt_zero)
+             sort_by: str = "customer_id", sort_dir: str = "asc", active_only: bool = False):
+        return self.repo.get_all(skip, limit, search, segment_id, sort_by, sort_dir, active_only)
 
-    def count(self, search: str, segment_id: Optional[int], balance_gt_zero: bool = False) -> int:
-        return self.repo.count(search, segment_id, balance_gt_zero)
+    def count(self, search: str, segment_id: Optional[int], active_only: bool = False) -> int:
+        return self.repo.count(search, segment_id, active_only)
 
     def get(self, customer_id: int):
         return self.repo.get_by_id(customer_id)
@@ -74,11 +74,11 @@ class IopCustomerService:
         self.repo = IopCustomerRepo(session)
 
     def list(self, skip: int, limit: int, search: str, segment_id: Optional[int],
-             sort_by: str = "customer_id", sort_dir: str = "asc", balance_gt_zero: bool = False):
-        return self.repo.get_all(skip, limit, search, segment_id, sort_by, sort_dir, balance_gt_zero)
+             sort_by: str = "customer_id", sort_dir: str = "asc", active_only: bool = False):
+        return self.repo.get_all(skip, limit, search, segment_id, sort_by, sort_dir, active_only)
 
-    def count(self, search: str, segment_id: Optional[int], balance_gt_zero: bool = False) -> int:
-        return self.repo.count(search, segment_id, balance_gt_zero)
+    def count(self, search: str, segment_id: Optional[int], active_only: bool = False) -> int:
+        return self.repo.count(search, segment_id, active_only)
 
     def get(self, customer_id: int):
         return self.repo.get_by_id(customer_id)

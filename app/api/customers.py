@@ -26,13 +26,13 @@ def list_edi(
     segment_id: Optional[int] = None,
     sort_by: str = "customer_id",
     sort_dir: str = "asc",
-    balance_gt_zero: bool = False,
+    active_only: bool = False,
     session: Session = Depends(get_session),
     _=Depends(get_current_user),
 ):
     svc = EdiCustomerService(session)
-    customers = svc.list(skip, limit, search, segment_id, sort_by, sort_dir, balance_gt_zero)
-    total = svc.count(search, segment_id, balance_gt_zero)
+    customers = svc.list(skip, limit, search, segment_id, sort_by, sort_dir, active_only)
+    total = svc.count(search, segment_id, active_only)
     customer_ids = [c.customer_id for c in customers]
     tamil_names = svc.get_tamil_names(customer_ids)
     data = []
@@ -109,13 +109,13 @@ def list_iop(
     segment_id: Optional[int] = None,
     sort_by: str = "customer_id",
     sort_dir: str = "asc",
-    balance_gt_zero: bool = False,
+    active_only: bool = False,
     session: Session = Depends(get_session),
     _=Depends(get_current_user),
 ):
     svc = IopCustomerService(session)
-    customers = svc.list(skip, limit, search, segment_id, sort_by, sort_dir, balance_gt_zero)
-    total = svc.count(search, segment_id, balance_gt_zero)
+    customers = svc.list(skip, limit, search, segment_id, sort_by, sort_dir, active_only)
+    total = svc.count(search, segment_id, active_only)
     customer_ids = [c.customer_id for c in customers]
     tamil_names = svc.get_tamil_names(customer_ids)
     data = []

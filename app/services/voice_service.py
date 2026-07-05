@@ -443,7 +443,7 @@ class VoiceService:
             active_ids = {
                 c.customer_id
                 for c in self.session.exec(
-                    select(EdiCustomer).where(col(EdiCustomer.outstanding_balance) > 0)
+                    select(EdiCustomer).where(EdiCustomer.is_closed == False)  # noqa: E712
                 ).all()
             }
             seg_map = {
@@ -455,7 +455,7 @@ class VoiceService:
             active_ids = {
                 c.customer_id
                 for c in self.session.exec(
-                    select(IopCustomer).where(col(IopCustomer.outstanding_balance) > 0)
+                    select(IopCustomer).where(IopCustomer.is_closed == False)  # noqa: E712
                 ).all()
             }
             seg_map = {

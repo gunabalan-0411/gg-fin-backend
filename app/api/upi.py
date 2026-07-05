@@ -267,11 +267,11 @@ def customers_with_balance(
     session: Session = Depends(get_session),
     _=Depends(get_current_user),
 ):
-    """EDI and IOP customers with outstanding_balance > 0."""
+    """EDI and IOP customers with open accounts."""
     from app.models.customer import EdiCustomer, IopCustomer
     from sqlmodel import col
-    edi = session.exec(select(EdiCustomer).where(col(EdiCustomer.outstanding_balance) > 0)).all()
-    iop = session.exec(select(IopCustomer).where(col(IopCustomer.outstanding_balance) > 0)).all()
+    edi = session.exec(select(EdiCustomer).where(EdiCustomer.is_closed == False)).all()
+    iop = session.exec(select(IopCustomer).where(IopCustomer.is_closed == False)).all()
     result = []
     for c in edi:
         result.append({
@@ -297,12 +297,12 @@ def fuzzy_suggest(
     session: Session = Depends(get_session),
     _=Depends(get_current_user),
 ):
-    """Fuzzy match a name against customers with outstanding balance > 0."""
+    """Fuzzy match a name against customers with open accounts."""
     from app.models.customer import EdiCustomer, IopCustomer
     from sqlmodel import col
     from app.utils.name_matching import get_similar_score
-    edi = session.exec(select(EdiCustomer).where(col(EdiCustomer.outstanding_balance) > 0)).all()
-    iop = session.exec(select(IopCustomer).where(col(IopCustomer.outstanding_balance) > 0)).all()
+    edi = session.exec(select(EdiCustomer).where(EdiCustomer.is_closed == False)).all()
+    iop = session.exec(select(IopCustomer).where(IopCustomer.is_closed == False)).all()
     candidates = []
     meta = {}
     for c in edi:
