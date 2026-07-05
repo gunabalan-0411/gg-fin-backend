@@ -80,11 +80,11 @@ async def extract_page(
         if r.customer_id in edi_active and r.customer_name_en
     ]
 
-    # IOP: only customers with loan_closure > 0, using English name map
+    # IOP: only customers with outstanding_balance > 0, using English name map
     iop_active = {
         c.customer_id
         for c in session.exec(
-            select(IopCustomer).where(col(IopCustomer.loan_closure) > 0)
+            select(IopCustomer).where(col(IopCustomer.outstanding_balance) > 0)
         ).all()
     }
     iop_list = [

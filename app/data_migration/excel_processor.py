@@ -92,8 +92,9 @@ class ExcelCollectionProcessor:
             "customer_id", "month", "loan_start_date", "customer_segment_id",
             "customer_name", "customer_address", "proof_aadhaar", "contact_number",
             "interest_payment_frequency", "loan_amount", "disbursed_amount",
-            "interest", "loan_closure", "remarks",
+            "interest", "_loan_closure_legacy", "remarks",
         ]
+        df = df.drop(columns=["_loan_closure_legacy"])
         df["loan_start_date"] = pd.to_datetime(df["loan_start_date"], errors="coerce").dt.date
         return df
 

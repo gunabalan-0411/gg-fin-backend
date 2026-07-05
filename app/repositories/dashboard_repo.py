@@ -147,7 +147,7 @@ class DashboardRepo:
                 WHERE payment_status = 'PAID'
                 GROUP BY customer_id
             ) paid ON paid.customer_id = c.customer_id
-            WHERE c.loan_closure > 0
+            WHERE c.outstanding_balance > 0
         """))
         row = result.first()
         return {"total_loan": float(row.total_loan), "total_receivable": float(row.total_receivable)} if row else {"total_loan": 0.0, "total_receivable": 0.0}
@@ -167,7 +167,7 @@ class DashboardRepo:
                 COALESCE(c.ignore, false) AS ignore
             FROM tbl_iop_customer c
             LEFT JOIN tbl_iop_name_map nm ON nm.customer_id = c.customer_id
-            WHERE c.loan_closure > 0
+            WHERE c.outstanding_balance > 0
             AND c.loan_start_date IS NOT NULL
             ORDER BY c.customer_id
         """))

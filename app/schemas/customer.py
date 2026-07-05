@@ -19,6 +19,7 @@ class EdiCustomerCreate(BaseModel):
     disbursed_amount: Optional[Decimal] = None
     interest: Optional[Decimal] = None
     outstanding_balance: Optional[Decimal] = None
+    is_closed: Optional[bool] = None
     remarks: Optional[str] = None
 
 
@@ -35,6 +36,7 @@ class EdiCustomerUpdate(BaseModel):
     disbursed_amount: Optional[Decimal] = None
     interest: Optional[Decimal] = None
     outstanding_balance: Optional[Decimal] = None
+    is_closed: Optional[bool] = None
     remarks: Optional[str] = None
     ignore: Optional[bool] = None
 
@@ -57,7 +59,9 @@ class IopCustomerCreate(BaseModel):
     loan_amount: Optional[Decimal] = None
     disbursed_amount: Optional[Decimal] = None
     interest: Optional[Decimal] = None
-    loan_closure: Optional[int] = None
+    principal_paid: Optional[Decimal] = None
+    outstanding_balance: Optional[Decimal] = None
+    is_closed: Optional[bool] = None
     remarks: Optional[str] = None
 
 
@@ -74,7 +78,9 @@ class IopCustomerUpdate(BaseModel):
     loan_amount: Optional[Decimal] = None
     disbursed_amount: Optional[Decimal] = None
     interest: Optional[Decimal] = None
-    loan_closure: Optional[int] = None
+    principal_paid: Optional[Decimal] = None
+    outstanding_balance: Optional[Decimal] = None
+    is_closed: Optional[bool] = None
     remarks: Optional[str] = None
     ignore: Optional[bool] = None
 

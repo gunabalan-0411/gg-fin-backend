@@ -455,7 +455,7 @@ class VoiceService:
             active_ids = {
                 c.customer_id
                 for c in self.session.exec(
-                    select(IopCustomer).where(col(IopCustomer.loan_closure) > 0)
+                    select(IopCustomer).where(col(IopCustomer.outstanding_balance) > 0)
                 ).all()
             }
             seg_map = {

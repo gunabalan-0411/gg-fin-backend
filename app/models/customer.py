@@ -21,6 +21,7 @@ class EdiCustomer(SQLModel, table=True):
     disbursed_amount: Optional[Decimal] = Field(default=None, decimal_places=2, max_digits=12)
     interest: Optional[Decimal] = Field(default=None, decimal_places=2, max_digits=12)
     outstanding_balance: Optional[Decimal] = Field(default=None, decimal_places=2, max_digits=12)
+    is_closed: bool = Field(default=False)
     remarks: Optional[str] = None
     ignore: bool = Field(default=False)
 
@@ -41,6 +42,8 @@ class IopCustomer(SQLModel, table=True):
     loan_amount: Optional[Decimal] = Field(default=None, decimal_places=2, max_digits=12)
     disbursed_amount: Optional[Decimal] = Field(default=None, decimal_places=2, max_digits=12)
     interest: Optional[Decimal] = Field(default=None, decimal_places=2, max_digits=12)
-    loan_closure: Optional[int] = None
+    principal_paid: Decimal = Field(default=Decimal("0"), decimal_places=2, max_digits=12)
+    outstanding_balance: Optional[Decimal] = Field(default=None, decimal_places=2, max_digits=12)
+    is_closed: bool = Field(default=False)
     remarks: Optional[str] = None
     ignore: bool = Field(default=False)

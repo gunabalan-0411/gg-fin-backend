@@ -267,11 +267,11 @@ def customers_with_balance(
     session: Session = Depends(get_session),
     _=Depends(get_current_user),
 ):
-    """EDI customers with outstanding_balance > 0 and IOP customers with loan_closure > 0."""
+    """EDI and IOP customers with outstanding_balance > 0."""
     from app.models.customer import EdiCustomer, IopCustomer
     from sqlmodel import col
     edi = session.exec(select(EdiCustomer).where(col(EdiCustomer.outstanding_balance) > 0)).all()
-    iop = session.exec(select(IopCustomer).where(col(IopCustomer.loan_closure) > 0)).all()
+    iop = session.exec(select(IopCustomer).where(col(IopCustomer.outstanding_balance) > 0)).all()
     result = []
     for c in edi:
         result.append({
@@ -285,7 +285,7 @@ def customers_with_balance(
             "customer_id": c.customer_id,
             "customer_name": c.customer_name or "",
             "type": "iop",
-            "balance": float(c.loan_closure or 0),
+            "balance": float(c.outstanding_balance or 0),
         })
     result.sort(key=lambda x: x["customer_name"])
     return {"data": result}
@@ -302,7 +302,7 @@ def fuzzy_suggest(
     from sqlmodel import col
     from app.utils.name_matching import get_similar_score
     edi = session.exec(select(EdiCustomer).where(col(EdiCustomer.outstanding_balance) > 0)).all()
-    iop = session.exec(select(IopCustomer).where(col(IopCustomer.loan_closure) > 0)).all()
+    iop = session.exec(select(IopCustomer).where(col(IopCustomer.outstanding_balance) > 0)).all()
     candidates = []
     meta = {}
     for c in edi:
@@ -318,7 +318,7 @@ def fuzzy_suggest(
             continue
         key = f"iop_{c.customer_id}"
         candidates.append({"customer_id": key, "name": name.lower().strip(), "display_name": name})
-        meta[key] = {"type": "iop", "id": c.customer_id, "balance": float(c.loan_closure or 0)}
+        meta[key] = {"type": "iop", "id": c.customer_id, "balance": float(c.outstanding_balance or 0)}
     scored = get_similar_score(query, candidates)
     result = []
     for s in scored[:8]:

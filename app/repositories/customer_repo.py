@@ -13,7 +13,7 @@ _EDI_SORT_COLS = frozenset({
 })
 _IOP_SORT_COLS = frozenset({
     "customer_id", "customer_name", "loan_amount",
-    "loan_closure", "loan_start_date", "interest",
+    "outstanding_balance", "loan_start_date", "interest",
 })
 
 
@@ -153,7 +153,7 @@ class IopCustomerRepo:
         if segment_id is not None:
             query = query.where(IopCustomer.customer_segment_id == segment_id)
         if balance_gt_zero:
-            query = query.where(col(IopCustomer.loan_closure) > 0)
+            query = query.where(col(IopCustomer.outstanding_balance) > 0)
         return query
 
     def get_all(self, skip: int = 0, limit: int = 100, search: str = "",
