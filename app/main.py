@@ -90,6 +90,11 @@ app.include_router(unclaimed_balances.router, prefix="/api/unclaimed-balances", 
 app.include_router(defaulted_balances.router, prefix="/api/defaulted-balances", tags=["defaulted-balances"])
 app.include_router(sql.router, prefix="/api/sql", tags=["sql"])
 app.include_router(export.router, prefix="/api/customers", tags=["export"])
+try:
+    from app.api import print_daily
+    app.include_router(print_daily.router, prefix="/api/print", tags=["print"])
+except Exception as _print_err:
+    logging.getLogger(__name__).warning("Print router disabled: %s", _print_err)
 
 
 @app.get("/health")

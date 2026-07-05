@@ -16,23 +16,31 @@ from app.services.transaction_service import EdiTransactionService, IopTransacti
 router = APIRouter()
 
 
+_ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
+
+
 @router.post("/upload")
 async def upload_pdf(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     _=Depends(get_current_user),
 ):
-    if not (file.filename or "").lower().endswith(".pdf"):
-        raise HTTPException(400, "Only PDF files are accepted")
+    fname = (file.filename or "").lower()
+    ext = "." + fname.rsplit(".", 1)[-1] if "." in fname else ""
+    if ext not in _ALLOWED_EXTENSIONS:
+        raise HTTPException(400, "Only PDF, JPG, or PNG files are accepted")
     content = await file.read()
     try:
-        # save_and_warm preprocesses page 0 before returning so the browser
-        # can display it the instant the upload response arrives.
-        session_id, total_pages = await run_in_threadpool(ocr_service.save_and_warm, content)
+        if ext == ".pdf":
+            session_id, total_pages = await run_in_threadpool(ocr_service.save_and_warm, content)
+        else:
+            session_id, total_pages = await run_in_threadpool(
+                ocr_service.save_image_and_warm, content, fname
+            )
     except Exception as exc:
-        raise HTTPException(500, f"Failed to process PDF: {exc}")
+        raise HTTPException(500, f"Failed to process file: {exc}")
 
-    # Preprocess the remaining pages in the background so navigation is instant.
+    # Preprocess remaining PDF pages in the background
     if total_pages > 1:
         background_tasks.add_task(
             ocr_service.preprocess_remaining_pages, session_id, total_pages

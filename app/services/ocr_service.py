@@ -126,6 +126,16 @@ def _pdf_path(session_id: str) -> Path:
     return _session_dir(session_id) / "source.pdf"
 
 
+def _source_image_path(session_id: str) -> Optional[Path]:
+    """Return path to source image if this session was uploaded as an image, else None."""
+    sdir = _session_dir(session_id)
+    for ext in ("jpg", "jpeg", "png"):
+        p = sdir / f"source.{ext}"
+        if p.exists():
+            return p
+    return None
+
+
 def _cached_page_path(session_id: str, page_index: int) -> Path:
     return _session_dir(session_id) / f"page_{page_index:04d}.jpg"
 
@@ -160,6 +170,25 @@ def save_and_warm(file_bytes: bytes) -> tuple[str, int]:
     except Exception as exc:
         log.warning("Upload: page 0 warm failed (will load on demand): %s", exc)
     return session_id, total_pages
+
+
+def save_image_and_warm(file_bytes: bytes, filename: str) -> tuple[str, int]:
+    """Save an uploaded image (JPG/PNG), preprocess it, and return (session_id, 1)."""
+    session_id = str(uuid.uuid4())
+    sdir = _session_dir(session_id)
+    sdir.mkdir(parents=True, exist_ok=True)
+
+    ext = "png" if filename.lower().endswith(".png") else "jpg"
+    img_path = sdir / f"source.{ext}"
+    img_path.write_bytes(file_bytes)
+
+    try:
+        _get_page_bytes(session_id, 0)
+        log.info("Upload: image warmed for session %s", session_id)
+    except Exception as exc:
+        log.warning("Upload: image warm failed (will load on demand): %s", exc)
+
+    return session_id, 1
 
 
 def preprocess_remaining_pages(session_id: str, total_pages: int) -> None:
@@ -289,24 +318,60 @@ def _get_page_bytes(session_id: str, page_index: int) -> tuple[bytes, str]:
     Return (image_bytes, mime_type) for a page.
 
     Checks disk cache first.  If not cached:
-      - Tries the OCR preprocessor → JPEG (preferred, 70–90% smaller)
-      - Falls back to raw PyMuPDF PNG if OpenCV is unavailable
+      - For image sessions: preprocesses the source image with OpenCV
+      - For PDF sessions: tries the OCR preprocessor → JPEG, falls back to PyMuPDF PNG
 
     Raises FileNotFoundError if the session doesn't exist.
     """
     sdir = _session_dir(session_id)
     if not sdir.exists():
-        raise FileNotFoundError(f"OCR session not found or expired — please re-upload the PDF")
+        raise FileNotFoundError(f"OCR session not found or expired — please re-upload the file")
 
     cached = _cached_page_path(session_id, page_index)
     if cached.exists():
         return cached.read_bytes(), "image/jpeg"
 
+    # Image session (JPG/PNG upload)
+    img_src = _source_image_path(session_id)
+    if img_src is not None:
+        return _preprocess_standalone_image(img_src, cached)
+
+    # PDF session
     preprocessor = _get_preprocessor()
     if preprocessor is not None:
         return _preprocess_page(preprocessor, session_id, page_index, cached)
     else:
         return _render_page_png(session_id, page_index), "image/png"
+
+
+def _preprocess_standalone_image(img_src: Path, cache_path: Path) -> tuple[bytes, str]:
+    """Preprocess a standalone uploaded image with the same OpenCV pipeline used for PDF pages."""
+    try:
+        import cv2
+        import numpy as np
+
+        raw = img_src.read_bytes()
+        arr = np.frombuffer(raw, np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            raise ValueError("Could not decode image")
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        denoised = cv2.bilateralFilter(enhanced, d=9, sigmaColor=18, sigmaSpace=18)
+        kernel = np.array([[0, -1, 0], [-1, 5.45, -1], [0, -1, 0]])
+        sharpened = cv2.filter2D(denoised, -1, kernel)
+        _, buf = cv2.imencode(".jpg", sharpened, [cv2.IMWRITE_JPEG_QUALITY, 87])
+        img_bytes = bytes(buf)
+        cache_path.write_bytes(img_bytes)
+        log.info("Standalone image preprocessed → %d bytes", len(img_bytes))
+        return img_bytes, "image/jpeg"
+    except Exception as exc:
+        log.warning("Standalone image preprocessing failed, using raw: %s", exc)
+        raw = img_src.read_bytes()
+        cache_path.write_bytes(raw)
+        return raw, "image/jpeg"
 
 
 def _preprocess_page(
