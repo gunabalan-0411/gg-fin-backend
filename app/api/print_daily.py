@@ -114,8 +114,8 @@ def _font_css() -> tuple[str, str, str]:
 # ── Shared HTML builders ────────────────────────────────────────────────────────
 
 _TH = (
-    "padding:6px 9px;text-align:left;font-size:10px;font-weight:700;color:#222;"
-    "letter-spacing:0.7px;border-bottom:1.5px solid #888;border-top:1px solid #bbb;"
+    "padding:3px 7px;text-align:left;font-size:8px;font-weight:700;color:#222;"
+    "letter-spacing:0.5px;border-bottom:1.5px solid #888;border-top:1px solid #bbb;"
     "background:#f0f0f0;"
 )
 
@@ -144,7 +144,7 @@ def _section_block(
     rows_html = ""
     for i, r in enumerate(rows):
         row_bg     = "#f8f8f8" if i % 2 == 1 else "#ffffff"
-        row_border = "" if i == len(rows) - 1 else "border-bottom:1px solid #e0e0e0;"
+        row_border = "" if i == len(rows) - 1 else "border-bottom:1px solid #e8e8e8;"
 
         loan    = float(r.loan_amount or 0)
         balance = float(r.outstanding_balance or 0)
@@ -160,7 +160,7 @@ def _section_block(
 
         cells = ""
         for key, _, align, width, dashed in col_defs:
-            base = f"padding:6px 9px;{row_border}"
+            base = f"padding:3px 7px;{row_border}"
             if align == "right":
                 base += "text-align:right;"
             if width:
@@ -171,62 +171,62 @@ def _section_block(
             if key == "id":
                 cells += (
                     f'<td style="{base}font-family:{mono_font};'
-                    f'font-size:10.5px;color:#555;font-weight:500;">'
+                    f'font-size:8.5px;color:#666;font-weight:500;">'
                     f'{r.customer_id}</td>'
                 )
             elif key == "name":
                 cells += (
-                    f'<td style="{base}font-weight:500;color:#1a1d23;">'
+                    f'<td style="{base}font-size:9px;font-weight:500;color:#1a1d23;">'
                     f'{r.ta_name or "—"}</td>'
                 )
             elif key == "date":
                 cells += (
                     f'<td style="{base}font-family:{mono_font};'
-                    f'font-size:10.5px;color:#555;">'
+                    f'font-size:8.5px;color:#666;">'
                     f'{_fmt_date(r.loan_start_date)}</td>'
                 )
             elif key == "loan":
                 cells += (
                     f'<td style="{base}font-family:{mono_font};'
-                    f'font-size:11.5px;font-weight:500;color:#222;">'
+                    f'font-size:9px;font-weight:500;color:#333;">'
                     f'{_fmt_amt(loan)}</td>'
                 )
             elif key == "balance":
-                bal_col = "color:#555;" if balance == 0 else "color:#1a1d23;"
+                bal_col = "color:#888;" if balance == 0 else "color:#1a1d23;"
                 cells += (
                     f'<td style="{base}font-family:{mono_font};'
-                    f'font-size:11.5px;font-weight:700;{bal_col}">'
+                    f'font-size:9px;font-weight:700;{bal_col}">'
                     f'{_fmt_amt(balance)}</td>'
                 )
             elif key == "days":
                 cells += (
                     f'<td style="{base}font-family:{mono_font};'
-                    f'font-size:10.5px;{days_style}">'
+                    f'font-size:8.5px;{days_style}">'
                     f'{days_str}</td>'
                 )
             elif key == "collect":
                 cells += (
                     f'<td style="{base}font-family:{mono_font};'
-                    f'font-size:11.5px;color:#1a1d23;min-width:80px;">'
+                    f'font-size:9px;color:#1a1d23;min-width:70px;">'
                     f'</td>'
                 )
 
         rows_html += f'<tr style="background:{row_bg};">{cells}</tr>\n'
 
-    return f"""<div style="margin-bottom:22px;">
-  <table style="border:none;width:100%;border-bottom:1.5px solid #1a1d23;margin-bottom:6px;border-collapse:separate;">
+    return f"""<div style="margin-bottom:14px;">
+  <table style="border:none;width:100%;border-bottom:1.5px solid #1a1d23;margin-bottom:4px;border-collapse:separate;">
     <tr>
-      <td style="border:none;width:30px;padding:3px 8px 5px 0;vertical-align:middle;">
-        <table style="border:1.5px solid #1a1d23;border-radius:4px;width:22px;border-collapse:separate;">
-          <tr><td style="border:none;text-align:center;font-size:10px;font-weight:700;color:#1a1d23;padding:2px 4px;">{sec_num}</td></tr>
+      <td style="border:none;width:24px;padding:2px 6px 4px 0;vertical-align:middle;">
+        <table style="border:1.5px solid #1a1d23;border-radius:3px;width:18px;border-collapse:separate;">
+          <tr><td style="border:none;text-align:center;font-size:8px;font-weight:700;color:#1a1d23;padding:1px 3px;">{sec_num}</td></tr>
         </table>
       </td>
-      <td style="border:none;font-size:13px;font-weight:700;color:#1a1d23;padding-bottom:5px;">{grp_label}</td>
+      <td style="border:none;font-size:10.5px;font-weight:700;color:#1a1d23;padding-bottom:4px;">{grp_label}</td>
     </tr>
   </table>
   <table>
-    <thead><tr style="background:#f0f0f0;">{headers}</tr></thead>
-    <tbody>{rows_html}</tbody>
+    <tr style="background:#f0f0f0;">{headers}</tr>
+    {rows_html}
   </table>
 </div>"""
 
@@ -240,7 +240,7 @@ def _grand_total_html(
     cells = ""
     name_done = False
     for key, _, align, width, dashed in col_defs:
-        base = "padding:9px;color:#fff;font-weight:700;font-size:12.5px;"
+        base = "padding:5px 7px;color:#fff;font-weight:700;font-size:9px;"
         if align == "right":
             base += "text-align:right;"
         if dashed:
@@ -249,31 +249,31 @@ def _grand_total_html(
         if key == "id":
             cells += (
                 f'<td style="{base}font-family:{mono_font};'
-                f'font-size:10.5px;color:#8a9099;width:40px;">—</td>'
+                f'font-size:8.5px;color:#8a9099;width:40px;">—</td>'
             )
         elif key == "name":
             label = "மொத்தம்" if not name_done else ""
             name_done = True
-            cells += f'<td style="{base}">{label}</td>'
+            cells += f'<td style="{base}font-size:9px;">{label}</td>'
         elif key == "date":
             cells += f'<td style="{base}"></td>'
         elif key == "loan":
             cells += (
-                f'<td style="{base}font-family:{mono_font};">'
+                f'<td style="{base}font-family:{mono_font};font-size:9px;">'
                 f'{_fmt_amt(total_loan)}</td>'
             )
         elif key == "balance":
             cells += (
-                f'<td style="{base}font-family:{mono_font};">'
+                f'<td style="{base}font-family:{mono_font};font-size:9px;">'
                 f'{_fmt_amt(total_balance)}</td>'
             )
         elif key == "days":
-            cells += f'<td style="{base}color:#8a9099;">—</td>'
+            cells += f'<td style="{base}font-size:8.5px;color:#8a9099;">—</td>'
         elif key == "collect":
-            cells += f'<td style="{base}min-width:80px;"></td>'
+            cells += f'<td style="{base}min-width:70px;"></td>'
 
     return (
-        f'<table style="margin-top:8px;border:none;">'
+        f'<table style="margin-top:6px;border:none;">'
         f'<tr style="background:#1a1d23;">{cells}</tr>'
         f'</table>'
     )
@@ -282,11 +282,11 @@ def _grand_total_html(
 def _footer_html(left_text: str, right_text: str, mono_font: str) -> str:
     return (
         f'<table style="border:none;border-top:1px solid #ccc;'
-        f'margin-top:28px;width:100%;">'
+        f'margin-top:18px;width:100%;">'
         f'<tr>'
-        f'<td style="border:none;padding-top:12px;font-size:10px;color:#777;">{left_text}</td>'
-        f'<td style="border:none;padding-top:12px;text-align:right;'
-        f'font-size:10px;color:#777;font-family:{mono_font};">{right_text}</td>'
+        f'<td style="border:none;padding-top:8px;font-size:8px;color:#999;">{left_text}</td>'
+        f'<td style="border:none;padding-top:8px;text-align:right;'
+        f'font-size:8px;color:#999;font-family:{mono_font};">{right_text}</td>'
         f'</tr></table>'
     )
 
@@ -380,25 +380,25 @@ def edi_daily_print(
 <style>
 {font_face}
 * {{ box-sizing:border-box; margin:0; padding:0; }}
-body {{ font-family:{body_font}; color:#1a1d23; font-size:12px; line-height:1.45; }}
+body {{ font-family:{body_font}; color:#1a1d23; font-size:9px; line-height:1.4; }}
 table {{ border-collapse:collapse; width:100%; }}
 </style>
 </head><body>
 
 <!-- EDI Header: brand+badge left | date right -->
-<table style="border:none;border-bottom:2.5px solid #1a1d23;padding-bottom:12px;margin-bottom:22px;width:100%;border-collapse:collapse;">
+<table style="border:none;border-bottom:2px solid #1a1d23;padding-bottom:8px;margin-bottom:14px;width:100%;border-collapse:collapse;">
   <tr>
-    <td style="border:none;vertical-align:bottom;padding-bottom:12px;">
-      <div style="font-size:22px;font-weight:700;letter-spacing:0.5px;color:#1a1d23;margin-bottom:4px;">GG Finance</div>
+    <td style="border:none;vertical-align:bottom;padding-bottom:8px;">
+      <div style="font-size:15px;font-weight:700;letter-spacing:0.3px;color:#1a1d23;margin-bottom:3px;">GG Finance</div>
       <table style="border:none;width:auto;border-collapse:separate;">
         <tr>
-          <td style="border:none;background:#1a1d23;border-radius:3px;padding:3px 10px;font-size:10px;font-weight:700;letter-spacing:2px;color:#fff;">EDI</td>
+          <td style="border:none;background:#1a1d23;border-radius:2px;padding:2px 8px;font-size:8px;font-weight:700;letter-spacing:1.5px;color:#fff;">EDI</td>
         </tr>
       </table>
     </td>
-    <td style="border:none;vertical-align:bottom;text-align:right;padding-bottom:12px;">
-      <div style="font-size:9px;font-weight:500;letter-spacing:2px;color:#888;margin-bottom:5px;">தினசரி வசூல் பட்டியல்</div>
-      <div style="font-family:{mono_font};font-size:14px;font-weight:700;color:#1a1d23;">{today_str}</div>
+    <td style="border:none;vertical-align:bottom;text-align:right;padding-bottom:8px;">
+      <div style="font-size:7.5px;font-weight:500;letter-spacing:1.5px;color:#888;margin-bottom:3px;">தினசரி வசூல் பட்டியல்</div>
+      <div style="font-family:{mono_font};font-size:11px;font-weight:700;color:#1a1d23;">{today_str}</div>
     </td>
   </tr>
 </table>
@@ -496,23 +496,23 @@ def iop_daily_print(
 <style>
 {font_face}
 * {{ box-sizing:border-box; margin:0; padding:0; }}
-body {{ font-family:{body_font}; color:#1a1d23; font-size:12px; line-height:1.45; }}
+body {{ font-family:{body_font}; color:#1a1d23; font-size:9px; line-height:1.4; }}
 table {{ border-collapse:collapse; width:100%; }}
 </style>
 </head><body>
 
 <!-- IOP Header: centered brand, subtitle, pills -->
-<div style="border-bottom:2.5px solid #1a1d23;padding-bottom:14px;margin-bottom:22px;">
-  <p style="font-size:24px;font-weight:700;letter-spacing:1px;color:#1a1d23;margin-bottom:2px;text-align:center;">GG Finance</p>
-  <p style="font-size:10px;font-weight:500;letter-spacing:2px;color:#555;margin-bottom:8px;text-align:center;">IOP · வட்டி வசூல் பட்டியல்</p>
+<div style="border-bottom:2px solid #1a1d23;padding-bottom:10px;margin-bottom:14px;">
+  <p style="font-size:15px;font-weight:700;letter-spacing:0.5px;color:#1a1d23;margin-bottom:2px;text-align:center;">GG Finance</p>
+  <p style="font-size:8px;font-weight:500;letter-spacing:1.5px;color:#555;margin-bottom:6px;text-align:center;">IOP · வட்டி வசூல் பட்டியல்</p>
   <table style="border:none;margin-left:auto;margin-right:auto;width:auto;">
     <tr>
-      <td style="border:1px solid #ccc;border-radius:3px;padding:2px 10px;font-size:11px;color:#444;">{today_str}</td>
-      <td style="border:none;width:16px;"></td>
-      <td style="border:1px solid #ccc;border-radius:3px;padding:2px 10px;font-size:11px;color:#444;">{len(rows)} வாடிக்கையாளர்கள்</td>
+      <td style="border:1px solid #ccc;border-radius:2px;padding:2px 8px;font-size:8.5px;color:#444;">{today_str}</td>
+      <td style="border:none;width:12px;"></td>
+      <td style="border:1px solid #ccc;border-radius:2px;padding:2px 8px;font-size:8.5px;color:#444;">{len(rows)} வாடிக்கையாளர்கள்</td>
     </tr>
   </table>
-  <div style="height:1px;background:#ccc;margin-top:14px;"> </div>
+  <div style="height:1px;background:#ccc;margin-top:10px;"> </div>
 </div>
 
 {_layout_sections(blocks, two_col)}
