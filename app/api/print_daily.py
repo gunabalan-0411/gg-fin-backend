@@ -19,7 +19,7 @@ import os
 import pathlib
 import traceback
 from collections import OrderedDict
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import text
@@ -414,24 +414,185 @@ def edi_daily_print(
     )
 
 
-# ── IOP endpoint ─────────────────────────────────────────────────────────────────
+# ── IOP endpoint — EL (Interest Schedule) calendar grid ─────────────────────────
+
+_TAMIL_DAYS_SHORT = ["தி", "செ", "பு", "வி", "வெ", "ச", "ஞா"]  # Mon=0 .. Sun=6
+
+
+def _el_css(font_face: str, body_font: str, mono_font: str) -> str:
+    return f"""
+{font_face}
+* {{ box-sizing: border-box; margin: 0; padding: 0; }}
+body {{ font-family: {body_font}; color: #1a1d23; font-size: 12px; }}
+
+/* ── EL Header ── */
+.header-top {{
+  display: flex; align-items: flex-end; justify-content: space-between;
+  padding-bottom: 10px; border-bottom: 2.5px solid #1a1d23; margin-bottom: 18px;
+}}
+.header-left  {{ display: flex; align-items: center; gap: 8px; }}
+.brand-name   {{ font-size: 22px; font-weight: 700; letter-spacing: 0.5px; color: #1a1d23; }}
+.el-badge {{
+  background: #1a1d23; color: #fff;
+  font-size: 10px; font-weight: 700; letter-spacing: 2px;
+  padding: 3px 10px; border-radius: 3px;
+}}
+.header-right      {{ text-align: right; display: flex; flex-direction: column; gap: 3px; align-items: flex-end; }}
+.header-label      {{ font-size: 9px; font-weight: 500; letter-spacing: 2px; color: #888; }}
+.header-date-range {{ font-family: {mono_font}; font-size: 13px; font-weight: 700; color: #1a1d23; }}
+
+/* ── Section ── */
+.section-group  {{ margin-bottom: 20px; break-inside: avoid; page-break-inside: avoid; }}
+.section-header {{
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 5px; padding-bottom: 4px;
+  border-bottom: 1.5px solid #1a1d23;
+}}
+.section-number {{
+  width: 20px; height: 20px; flex-shrink: 0;
+  border: 1.5px solid #1a1d23; border-radius: 4px;
+  font-size: 10px; font-weight: 700; color: #1a1d23;
+  display: flex; align-items: center; justify-content: center;
+}}
+.section-title {{ font-size: 13px; font-weight: 700; color: #1a1d23; }}
+
+/* ── EL Table ── */
+table {{
+  width: 100%; border-collapse: collapse;
+  font-size: 10.5px; table-layout: fixed;
+}}
+thead th {{
+  padding: 5px 6px; text-align: left;
+  font-size: 10px; font-weight: 600; color: #555;
+  border-bottom: 1.5px solid #888; border-top: 1px solid #ccc;
+  background: #f4f4f4;
+}}
+thead th.th-date {{
+  background: #1a1d23; color: #fff;
+  font-family: {mono_font}; font-size: 10px;
+  line-height: 1.2; padding: 4px 2px;
+  text-align: center;
+}}
+thead th.th-date .day-name {{
+  display: block; font-size: 7px;
+  color: rgba(255,255,255,0.5); font-family: {body_font};
+}}
+thead th.th-date.weekend {{ background: #3a3a3a; }}
+
+tbody tr {{ border-bottom: 1px solid #e5e5e5; }}
+tbody tr:nth-child(even) {{ background: #f9f9f9; }}
+tbody tr:last-child {{ border-bottom: none; }}
+td {{ padding: 5px 6px; vertical-align: middle; }}
+.td-id    {{ font-family: {mono_font}; font-size: 10px; color: #777; }}
+.td-name  {{ font-size: 10.5px; font-weight: 500; color: #1a1d23;
+             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.td-start {{ font-family: {mono_font}; font-size: 10px; color: #666; }}
+.td-loan  {{ font-family: {mono_font}; font-size: 10.5px; font-weight: 600; color: #1a1d23; }}
+
+/* ── Date mark cells ── */
+td.td-mark {{
+  padding: 0; height: 32px; text-align: center;
+}}
+td.td-mark.highlight {{
+  background: linear-gradient(to bottom, #3a7d1e 6px, #eef8e6 6px);
+  position: relative;
+}}
+td.td-mark.highlight::after {{
+  content: ''; position: absolute;
+  bottom: 5px; left: 3px; right: 3px;
+  height: 1px; background: #5a9a3a; opacity: 0.7;
+}}
+
+/* ── Grand total row ── */
+.total-row {{ background: #1a1d23 !important; border-top: 2px solid #1a1d23; }}
+.total-row td {{ padding: 8px 6px; color: #fff; font-weight: 700; font-size: 11px; }}
+.total-label {{ font-size: 11px; }}
+.total-value {{ font-family: {mono_font}; font-size: 12px; font-weight: 700; }}
+
+/* ── Footer ── */
+.report-footer {{
+  margin-top: 24px; padding-top: 10px; border-top: 1px solid #ccc;
+  display: flex; justify-content: space-between; align-items: center;
+}}
+.footer-left  {{ font-size: 10px; color: #777; }}
+.footer-right {{ font-size: 10px; color: #777; font-family: {mono_font}; }}
+"""
+
+
+def _el_section_block(
+    sec_num: int,
+    grp_label: str,
+    el_rows: list,   # list of (row, due_marks: list[bool])
+    window: list,    # 10 date objects
+) -> str:
+    date_headers = ""
+    for d in window:
+        day_name   = _TAMIL_DAYS_SHORT[d.weekday()]
+        is_weekend = d.weekday() >= 5
+        cls = "th-date weekend" if is_weekend else "th-date"
+        date_headers += (
+            f'<th class="{cls}">{d.day:02d}'
+            f'<span class="day-name">{day_name}</span></th>'
+        )
+
+    colgroup = (
+        '<col style="width:20px"/>'
+        '<col style="width:115px"/>'
+        '<col style="width:68px"/>'
+        '<col style="width:70px"/>'
+        + '<col style="width:26px"/>' * 10
+    )
+
+    rows_html = ""
+    for r, due_marks in el_rows:
+        start_str = r.loan_start_date.strftime("%d-%m") if r.loan_start_date else "—"
+        loan_k    = f"₹{round(float(r.loan_amount or 0) / 1000)}K"
+        date_cells = "".join(
+            '<td class="td-mark highlight"></td>' if due else '<td class="td-mark"></td>'
+            for due in due_marks
+        )
+        rows_html += (
+            f'<tr>'
+            f'<td class="td-id">{r.customer_id}</td>'
+            f'<td class="td-name">{r.ta_name or "—"}</td>'
+            f'<td class="td-start">{start_str}</td>'
+            f'<td class="td-loan">{loan_k}</td>'
+            f'{date_cells}'
+            f'</tr>\n'
+        )
+
+    return f"""<div class="section-group">
+  <div class="section-header">
+    <div class="section-number">{sec_num}</div>
+    <div class="section-title">{grp_label}</div>
+  </div>
+  <table>
+    <colgroup>{colgroup}</colgroup>
+    <thead><tr>
+      <th>எண்</th>
+      <th>பெயர்</th>
+      <th>தொடங்கிய</th>
+      <th>கடன் ₹</th>
+      {date_headers}
+    </tr></thead>
+    <tbody>{rows_html}</tbody>
+  </table>
+</div>"""
+
 
 @router.get("/iop")
 def iop_daily_print(
-    cols: str = Query(default=_DEFAULT_COLS),
-    two_col: bool = Query(default=False),
+    cols: str = Query(default=_DEFAULT_COLS),   # ignored — EL format has fixed columns
+    two_col: bool = Query(default=False),        # ignored — EL format is single column
     session: Session = Depends(get_session),
     _=Depends(get_current_user),
 ):
-    # Only show customers whose interest is due today:
-    #   (today - loan_start_date).days % frequency == 0
-    # Pure modulo — no calendar adjustment. Feb 29 / 31-day months are skipped naturally.
-    rows = session.exec(text("""
+    # Fetch ALL active IOP customers with a payment frequency
+    all_rows = session.exec(text("""
         SELECT
             c.customer_id,
             c.customer_segment_id,
             c.loan_amount,
-            c.outstanding_balance,
             c.loan_start_date,
             c.interest_payment_frequency,
             COALESCE(nm.customer_name_ta, c.customer_name, '') AS ta_name,
@@ -446,94 +607,106 @@ def iop_daily_print(
           AND c.interest_payment_frequency > 0
           AND c.loan_start_date IS NOT NULL
           AND c.loan_start_date <= CURRENT_DATE
-          AND (CURRENT_DATE - c.loan_start_date) % CAST(c.interest_payment_frequency AS INTEGER) = 0
         ORDER BY c.customer_segment_id ASC NULLS LAST, c.loan_start_date ASC, c.customer_id ASC
     """)).fetchall()
 
-    customer_ids = [r.customer_id for r in rows]
-    last_paid_map: dict = {}
-    if customer_ids:
-        id_list = ",".join(str(i) for i in customer_ids)
-        paid_rows = session.exec(text(f"""
-            SELECT customer_id, MAX(collection_date) AS last_paid
-            FROM tbl_iop_transactions
-            WHERE customer_id IN ({id_list}) AND payment_status = 'PAID'
-            GROUP BY customer_id
-        """)).fetchall()
-        last_paid_map = {r.customer_id: r.last_paid for r in paid_rows}
+    today  = date.today()
+    window = [today + timedelta(days=i) for i in range(10)]
 
-    today     = date.today()
-    today_str = today.strftime("%d-%m-%Y")
-    col_defs  = _parse_cols(cols)
+    # Filter to customers with at least one due date in the 10-day window.
+    # Due date rule: (day - loan_start_date).days % frequency == 0
+    # Pure modulo — no calendar correction for short months.
+    el_rows: list = []
+    for r in all_rows:
+        freq    = int(r.interest_payment_frequency)
+        marks   = []
+        has_due = False
+        for d in window:
+            if d >= r.loan_start_date:
+                is_due = (d - r.loan_start_date).days % freq == 0
+            else:
+                is_due = False
+            marks.append(is_due)
+            if is_due:
+                has_due = True
+        if has_due:
+            el_rows.append((r, marks))
+
+    today_str      = today.strftime("%d-%m-%Y")
+    window_end_str = window[-1].strftime("%d-%m-%Y")
     font_face, body_font, mono_font = _font_face_css()
-    css = _base_css(font_face, body_font, mono_font)
+    css = _el_css(font_face, body_font, mono_font)
 
-    # Add IOP-specific header CSS
-    css += f"""
-/* ── IOP Header ── */
-.report-header   {{ border-bottom: 2.5px solid #1a1d23; padding-bottom: 14px; margin-bottom: 22px; }}
-.header-center   {{ text-align: center; }}
-.brand-name      {{ font-size: 24px; font-weight: 700; letter-spacing: 1px; color: #1a1d23; margin-bottom: 2px; }}
-.brand-sub       {{ font-size: 10px; font-weight: 500; letter-spacing: 2.5px; color: #555; margin-bottom: 6px; }}
-.header-meta-line {{
-  display: flex; justify-content: center; gap: 18px;
-  font-size: 11px; color: #444; margin-top: 6px;
-}}
-.header-meta-line span {{ border: 1px solid #ccc; border-radius: 3px; padding: 2px 10px; }}
-.header-divider  {{ height: 1px; background: #ccc; margin-top: 14px; }}
-"""
-
+    # Group by segment, preserving order
     groups: OrderedDict = OrderedDict()
-    total_loan = total_balance = 0.0
-    for r in rows:
+    total_loan = 0.0
+    for r, marks in el_rows:
         key = str(r.customer_segment_id or "none")
         if key not in groups:
-            groups[key] = {"label": r.grp_ta or r.grp_en or f"Group {r.customer_segment_id}", "rows": []}
-        groups[key]["rows"].append(r)
-        total_loan    += float(r.loan_amount or 0)
-        total_balance += float(r.outstanding_balance or 0)
+            groups[key] = {
+                "label": r.grp_ta or r.grp_en or f"Group {r.customer_segment_id}",
+                "rows": [],
+            }
+        groups[key]["rows"].append((r, marks))
+        total_loan += float(r.loan_amount or 0)
 
     blocks = [
-        _section_block(i, g["label"], col_defs, g["rows"], today, last_paid_map)
+        _el_section_block(i, g["label"], g["rows"], window)
         for i, (_, g) in enumerate(groups.items(), 1)
     ]
+
+    total_k    = _fmt_amt(total_loan)
+    colgroup_t = (
+        '<col style="width:20px"/>'
+        '<col style="width:115px"/>'
+        '<col style="width:68px"/>'
+        '<col style="width:70px"/>'
+        + '<col style="width:26px"/>' * 10
+    )
+    grand_total = f"""<table style="margin-top:8px;">
+  <colgroup>{colgroup_t}</colgroup>
+  <tbody><tr class="total-row">
+    <td class="total-label" colspan="3">மொத்தம்</td>
+    <td class="total-value">{total_k}</td>
+    <td colspan="10"></td>
+  </tr></tbody>
+</table>"""
 
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>{css}</style>
 </head><body>
 
-<div class="report-header">
-  <div class="header-center">
+<div class="header-top">
+  <div class="header-left">
     <div class="brand-name">GG Finance</div>
-    <div class="brand-sub">IOP · வட்டி வசூல் பட்டியல்</div>
-    <div class="header-meta-line">
-      <span>{today_str}</span>
-      <span>{len(rows)} வாடிக்கையாளர்கள்</span>
-    </div>
+    <div class="el-badge">EL</div>
   </div>
-  <div class="header-divider"></div>
+  <div class="header-right">
+    <div class="header-label">வட்டி சேகரிப்பு அட்டவணை</div>
+    <div class="header-date-range">{today_str} → {window_end_str}</div>
+  </div>
 </div>
 
-{_layout_sections(blocks, two_col)}
+{''.join(blocks)}
 
-{_grand_total_html(total_loan, total_balance, col_defs)}
+{grand_total}
 
-{_footer_html(
-    f"GG Finance · IOP · வட்டி வசூல் பட்டியல் · {today_str}",
-    f"இன்று வசூல்: {len(rows)} வாடிக்கையாளர்கள்",
-)}
+<div class="report-footer">
+  <div class="footer-left">GG Finance · EL · {today_str}</div>
+  <div class="footer-right">{len(el_rows)} வாடிக்கையாளர்கள்</div>
+</div>
 
 </body></html>"""
 
     try:
         pdf_bytes = _render_pdf(html, landscape=False)
     except Exception:
-        log.error("IOP PDF render failed:\n%s", traceback.format_exc())
+        log.error("IOP EL PDF render failed:\n%s", traceback.format_exc())
         raise HTTPException(500, "PDF generation failed")
 
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'inline; filename="IOP_Interest_{today_str}.pdf"'},
+        headers={"Content-Disposition": f'inline; filename="IOP_EL_{today_str}.pdf"'},
     )
