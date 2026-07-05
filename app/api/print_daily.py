@@ -1,19 +1,22 @@
 """Daily Print PDF — EDI and IOP.
 
-Design: exact match to GG Finance Report.dc.html from design ZIPs.
-  - Near-black #1a1d23 palette, print-safe
-  - IBM Plex Mono for IDs / dates / amounts; Noto Sans Tamil for Tamil
-  - Numbered group sections, one table per group
-  - Grand total row in #1a1d23 with white text
-  - Configurable columns via ?cols= (comma-separated)
-  - Two-column group layout via ?two_col=true
+Renderer: WeasyPrint (Cairo/Pango) for full CSS support:
+  - display:flex  (header, section header, footer)
+  - nth-child     (alternating row colours)
+  - border-radius (section number badge, IOP pills)
+  - Tamil shaping via HarfBuzz through Pango
 
-EDI header: brand+badge left | date right
-IOP header: centered brand, subtitle, date+count pills
+Design matches reference ZIPs exactly:
+  EDI  — brand+badge left | label+date right
+  IOP  — centered brand, subtitle, date+count pills
+
+Column selection: ?cols=id,name,date,loan,balance,days,collect
+Two-column layout: ?two_col=true
 """
 import io
 import logging
 import os
+import pathlib
 import traceback
 from collections import OrderedDict
 from datetime import date
@@ -28,24 +31,24 @@ from app.core.database import get_session
 router = APIRouter()
 log = logging.getLogger(__name__)
 
-_FONTS_DIR  = os.path.join(os.path.dirname(__file__), "..", "..", "fonts")
+_FONTS_DIR  = pathlib.Path(__file__).parent.parent.parent / "fonts"
 _TAMIL_FONT = "NotoSansTamil-Regular.ttf"
 _MONO_FONT  = "IBMPlexMono-Regular.ttf"
 
-# ── Column registry: key → (Tamil label, align, fixed_width, dashed_left) ─────
+# ── Column registry: key → (header label, align, fixed_width, dashed_left) ──────
 _COLS: dict[str, tuple] = {
-    "id":      ("ID",         "left",  "40px", False),
-    "name":    ("பெயர்",      "left",  None,   False),
-    "date":    ("தொடக்கம்",   "left",  "88px", False),
-    "loan":    ("கடன் ₹",     "right", "80px", False),
-    "balance": ("நிலுவை ₹",   "right", "80px", False),
-    "days":    ("நாட்கள்",    "right", "50px", False),
-    "collect": ("வசூல் ₹",    "right", "80px", True),
+    "id":      ("எண்",             "left",  "40px",  False),
+    "name":    ("பெயர்",            "left",  None,    False),
+    "date":    ("தொடங்கிய",         "left",  "88px",  False),
+    "loan":    ("கடன் ₹",           "right", "80px",  False),
+    "balance": ("நிலுவை ₹",         "right", "80px",  False),
+    "days":    ("நாட்கள்",          "right", "50px",  False),
+    "collect": ("இன்று வசூல் ₹",    "right", "80px",  True),
 }
 _DEFAULT_COLS = "id,name,date,loan,balance,days,collect"
 
 
-# ── Utility ─────────────────────────────────────────────────────────────────────
+# ── Utilities ────────────────────────────────────────────────────────────────────
 
 def _fmt_amt(n: float) -> str:
     n = int(round(n))
@@ -67,166 +70,177 @@ def _fmt_date(d) -> str:
 
 
 def _parse_cols(cols_str: str) -> list[tuple]:
-    """Parse ?cols= into list of (key, label, align, width, dashed)."""
     keys = [k.strip() for k in cols_str.split(",") if k.strip() in _COLS]
     if not keys:
         keys = list(_COLS.keys())
     return [(k, *_COLS[k]) for k in keys]
 
 
-def _render_pdf(html: str, landscape: bool = False) -> bytes:
-    import fitz
-    has = os.path.exists(os.path.join(_FONTS_DIR, _TAMIL_FONT)) or \
-          os.path.exists(os.path.join(_FONTS_DIR, _MONO_FONT))
-    archive = fitz.Archive(_FONTS_DIR) if has else None
-    story   = fitz.Story(html, archive=archive) if archive else fitz.Story(html)
-    buf     = io.BytesIO()
-    writer  = fitz.DocumentWriter(buf)
-    A4      = fitz.paper_rect("a4")
-    rect    = fitz.Rect(0, 0, A4.y1, A4.x1) if landscape else A4
-    margin  = 36
-    clip    = fitz.Rect(rect.x0 + margin, rect.y0 + margin,
-                        rect.x1 - margin, rect.y1 - margin)
-    more = True
-    while more:
-        dev = writer.begin_page(rect)
-        more, _ = story.place(clip)
-        story.draw(dev)
-        writer.end_page()
-    writer.close()
-    return buf.getvalue()
-
-
-def _font_css() -> tuple[str, str, str]:
-    """(font_face_css, body_font, mono_font)"""
+def _font_face_css() -> tuple[str, str, str]:
+    """(font_face_css, body_font_family, mono_font_family)"""
+    t = _FONTS_DIR / _TAMIL_FONT
+    m = _FONTS_DIR / _MONO_FONT
     face = ""
-    t = os.path.join(_FONTS_DIR, _TAMIL_FONT)
-    m = os.path.join(_FONTS_DIR, _MONO_FONT)
-    if os.path.exists(t):
-        face += f'@font-face {{ font-family:"NotoTamil"; src:url("{_TAMIL_FONT}"); }}\n'
-    if os.path.exists(m):
-        face += f'@font-face {{ font-family:"IBMPlexMono"; src:url("{_MONO_FONT}"); }}\n'
-    body = '"NotoTamil", sans-serif' if os.path.exists(t) else "sans-serif"
-    mono = '"IBMPlexMono", monospace' if os.path.exists(m) else "monospace"
+    if t.exists():
+        face += f'@font-face {{font-family:"NotoTamil";src:url("{t.as_uri()}");font-weight:400 700;}}\n'
+    if m.exists():
+        face += f'@font-face {{font-family:"IBMPlexMono";src:url("{m.as_uri()}");font-weight:400 500;}}\n'
+    body = '"NotoTamil", sans-serif' if t.exists() else "sans-serif"
+    mono = '"IBMPlexMono", monospace' if m.exists() else "monospace"
     return face, body, mono
 
 
-# ── Shared HTML builders ────────────────────────────────────────────────────────
+def _render_pdf(html: str, landscape: bool = False) -> bytes:
+    from weasyprint import HTML, CSS  # noqa
+    size = "A4 landscape" if landscape else "A4"
+    page_css = CSS(string=f"@page {{ size: {size}; margin: 0.75in; }}")
+    buf = io.BytesIO()
+    HTML(string=html, base_url=None).write_pdf(buf, stylesheets=[page_css])
+    return buf.getvalue()
 
-_TH = (
-    "padding:3px 7px;text-align:left;font-size:8px;font-weight:700;color:#222;"
-    "letter-spacing:0.5px;border-bottom:1.5px solid #888;border-top:1px solid #bbb;"
-    "background:#f0f0f0;"
-)
 
+# ── Shared CSS ───────────────────────────────────────────────────────────────────
+
+def _base_css(font_face: str, body_font: str, mono_font: str) -> str:
+    return f"""
+{font_face}
+* {{ box-sizing: border-box; margin: 0; padding: 0; }}
+body {{ font-family: {body_font}; color: #1a1d23; font-size: 12px; }}
+
+/* ── Section ── */
+.section-group {{ margin-bottom: 22px; break-inside: avoid; page-break-inside: avoid; }}
+.section-header {{
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 6px; padding-bottom: 5px;
+  border-bottom: 1.5px solid #1a1d23;
+}}
+.section-number {{
+  width: 20px; height: 20px; flex-shrink: 0;
+  border: 1.5px solid #1a1d23; border-radius: 4px;
+  font-size: 10px; font-weight: 700; color: #1a1d23;
+  display: flex; align-items: center; justify-content: center;
+}}
+.section-title {{ font-size: 13px; font-weight: 700; color: #1a1d23; }}
+
+/* ── Table ── */
+table {{ width: 100%; border-collapse: collapse; font-size: 12px; }}
+thead tr {{ background: #f0f0f0; }}
+thead th {{
+  padding: 6px 9px; text-align: left;
+  font-size: 10px; font-weight: 700; color: #222;
+  letter-spacing: 0.7px;
+  border-bottom: 1.5px solid #888; border-top: 1px solid #bbb;
+}}
+thead th.num {{ text-align: right; }}
+thead th.col-collect {{ border-left: 1px dashed #bbb; }}
+tbody tr {{ border-bottom: 1px solid #e0e0e0; }}
+tbody tr:nth-child(even) {{ background: #f8f8f8; }}
+tbody tr:last-child {{ border-bottom: none; }}
+td {{ padding: 6px 9px; vertical-align: middle; }}
+
+/* ── Cell types ── */
+.td-id   {{ font-family: {mono_font}; font-size: 10.5px; color: #555; font-weight: 500; width: 40px; }}
+.td-name {{ font-weight: 500; color: #1a1d23; }}
+.td-date {{ font-family: {mono_font}; font-size: 10.5px; color: #555; white-space: nowrap; }}
+.td-amount {{ text-align: right; font-family: {mono_font}; font-size: 11.5px; font-weight: 500; }}
+.td-loan    {{ color: #222; }}
+.td-balance {{ font-weight: 700; }}
+.td-balance.positive {{ color: #1a1d23; }}
+.td-balance.zero     {{ color: #555; }}
+.td-balance.negative {{ color: #1a1d23; text-decoration: underline; }}
+.td-days        {{ text-align: right; font-family: {mono_font}; font-size: 10.5px; color: #555; }}
+.td-days.overdue {{ color: #1a1d23; font-weight: 700; }}
+.td-days.dash   {{ color: #999; }}
+.td-collect {{
+  text-align: right; font-family: {mono_font}; font-size: 11.5px;
+  color: #1a1d23; border-left: 1px dashed #bbb; min-width: 80px;
+}}
+
+/* ── Grand total ── */
+.total-row {{ background: #1a1d23 !important; border-top: 2px solid #1a1d23; }}
+.total-row td {{ padding: 9px; color: #fff; font-weight: 700; font-size: 12.5px; }}
+.total-row .td-id {{ color: rgba(255,255,255,0.45); font-size: 10.5px; }}
+.total-row .td-days  {{ color: rgba(255,255,255,0.4); }}
+.total-row .td-collect {{ color: rgba(255,255,255,0.4); }}
+
+/* ── Footer ── */
+.report-footer {{
+  margin-top: 28px; padding-top: 12px; border-top: 1px solid #ccc;
+  display: flex; justify-content: space-between; align-items: center;
+}}
+.footer-left  {{ font-size: 10px; color: #777; }}
+.footer-right {{ font-size: 10px; color: #777; font-family: {mono_font}; }}
+
+/* ── Two-column layout ── */
+.two-col-row {{
+  display: flex; gap: 24px; margin-bottom: 0;
+}}
+.two-col-row > div {{ flex: 1; min-width: 0; }}
+"""
+
+
+# ── HTML builders ────────────────────────────────────────────────────────────────
 
 def _section_block(
     sec_num: int,
     grp_label: str,
     col_defs: list[tuple],
-    mono_font: str,
     rows: list,
     today: date,
-    last_paid_map: dict,   # customer_id → date | None
+    last_paid_map: dict,
 ) -> str:
-    """One numbered section: header + table (no grand total)."""
+    # Column headers
     headers = ""
     for key, label, align, width, dashed in col_defs:
-        th = _TH
-        if align == "right":
-            th += "text-align:right;"
-        if width:
-            th += f"width:{width};"
+        cls = "num" if align == "right" else ""
         if dashed:
-            th += "border-left:1px dashed #bbb;"
-        headers += f'<th style="{th}">{label}</th>'
+            cls = (cls + " col-collect").strip()
+        style = f'width:{width};' if width else ""
+        headers += f'<th class="{cls}" style="{style}">{label}</th>'
 
     rows_html = ""
-    for i, r in enumerate(rows):
-        row_bg     = "#f8f8f8" if i % 2 == 1 else "#ffffff"
-        row_border = "" if i == len(rows) - 1 else "border-bottom:1px solid #e8e8e8;"
-
+    for r in rows:
         loan    = float(r.loan_amount or 0)
         balance = float(r.outstanding_balance or 0)
 
         last_paid = last_paid_map.get(r.customer_id)
         if last_paid:
-            days_ago   = (today - last_paid).days
-            days_str   = str(days_ago)
-            days_style = "font-weight:700;color:#1a1d23;" if days_ago > 7 else ""
+            days_ago  = (today - last_paid).days
+            days_str  = str(days_ago)
+            days_cls  = "td-days overdue" if days_ago > 7 else "td-days"
         else:
-            days_str   = "—"
-            days_style = "color:#999;"
+            days_str = "—"
+            days_cls = "td-days dash"
+
+        bal_cls = "positive" if balance > 0 else ("zero" if balance == 0 else "negative")
 
         cells = ""
         for key, _, align, width, dashed in col_defs:
-            base = f"padding:3px 7px;{row_border}"
-            if align == "right":
-                base += "text-align:right;"
-            if width:
-                base += f"width:{width};"
-            if dashed:
-                base += "border-left:1px dashed #bbb;"
-
             if key == "id":
-                cells += (
-                    f'<td style="{base}font-family:{mono_font};'
-                    f'font-size:8.5px;color:#666;font-weight:500;">'
-                    f'{r.customer_id}</td>'
-                )
+                cells += f'<td class="td-id">{r.customer_id}</td>'
             elif key == "name":
-                cells += (
-                    f'<td style="{base}font-size:9px;font-weight:500;color:#1a1d23;">'
-                    f'{r.ta_name or "—"}</td>'
-                )
+                cells += f'<td class="td-name">{r.ta_name or "—"}</td>'
             elif key == "date":
-                cells += (
-                    f'<td style="{base}font-family:{mono_font};'
-                    f'font-size:8.5px;color:#666;">'
-                    f'{_fmt_date(r.loan_start_date)}</td>'
-                )
+                cells += f'<td class="td-date">{_fmt_date(r.loan_start_date)}</td>'
             elif key == "loan":
-                cells += (
-                    f'<td style="{base}font-family:{mono_font};'
-                    f'font-size:9px;font-weight:500;color:#333;">'
-                    f'{_fmt_amt(loan)}</td>'
-                )
+                cells += f'<td class="td-amount td-loan">{_fmt_amt(loan)}</td>'
             elif key == "balance":
-                bal_col = "color:#888;" if balance == 0 else "color:#1a1d23;"
-                cells += (
-                    f'<td style="{base}font-family:{mono_font};'
-                    f'font-size:9px;font-weight:700;{bal_col}">'
-                    f'{_fmt_amt(balance)}</td>'
-                )
+                cells += f'<td class="td-amount td-balance {bal_cls}">{_fmt_amt(balance)}</td>'
             elif key == "days":
-                cells += (
-                    f'<td style="{base}font-family:{mono_font};'
-                    f'font-size:8.5px;{days_style}">'
-                    f'{days_str}</td>'
-                )
+                cells += f'<td class="{days_cls}">{days_str}</td>'
             elif key == "collect":
-                cells += (
-                    f'<td style="{base}font-family:{mono_font};'
-                    f'font-size:9px;color:#1a1d23;min-width:70px;">'
-                    f'</td>'
-                )
+                cells += '<td class="td-collect"></td>'
 
-        rows_html += f'<tr style="background:{row_bg};">{cells}</tr>\n'
+        rows_html += f'<tr>{cells}</tr>\n'
 
-    return f"""<div style="margin-bottom:14px;">
-  <table style="border:none;width:100%;border-bottom:1.5px solid #1a1d23;margin-bottom:4px;border-collapse:separate;">
-    <tr>
-      <td style="border:none;width:24px;padding:2px 6px 4px 0;vertical-align:middle;">
-        <table style="border:1.5px solid #1a1d23;border-radius:3px;width:18px;border-collapse:separate;">
-          <tr><td style="border:none;text-align:center;font-size:8px;font-weight:700;color:#1a1d23;padding:1px 3px;">{sec_num}</td></tr>
-        </table>
-      </td>
-      <td style="border:none;font-size:10.5px;font-weight:700;color:#1a1d23;padding-bottom:4px;">{grp_label}</td>
-    </tr>
-  </table>
+    return f"""<div class="section-group">
+  <div class="section-header">
+    <div class="section-number">{sec_num}</div>
+    <div class="section-title">{grp_label}</div>
+  </div>
   <table>
-    <tr style="background:#f0f0f0;">{headers}</tr>
-    {rows_html}
+    <thead><tr>{headers}</tr></thead>
+    <tbody>{rows_html}</tbody>
   </table>
 </div>"""
 
@@ -235,60 +249,34 @@ def _grand_total_html(
     total_loan: float,
     total_balance: float,
     col_defs: list[tuple],
-    mono_font: str,
 ) -> str:
     cells = ""
-    name_done = False
+    label_done = False
     for key, _, align, width, dashed in col_defs:
-        base = "padding:5px 7px;color:#fff;font-weight:700;font-size:9px;"
-        if align == "right":
-            base += "text-align:right;"
-        if dashed:
-            base += "border-left:1px dashed #555;"
-
         if key == "id":
-            cells += (
-                f'<td style="{base}font-family:{mono_font};'
-                f'font-size:8.5px;color:#8a9099;width:40px;">—</td>'
-            )
+            cells += '<td class="td-id">—</td>'
         elif key == "name":
-            label = "மொத்தம்" if not name_done else ""
-            name_done = True
-            cells += f'<td style="{base}font-size:9px;">{label}</td>'
+            label = "மொத்தம்" if not label_done else ""
+            label_done = True
+            cells += f'<td style="font-size:13px;">{label}</td>'
         elif key == "date":
-            cells += f'<td style="{base}"></td>'
+            cells += '<td></td>'
         elif key == "loan":
-            cells += (
-                f'<td style="{base}font-family:{mono_font};font-size:9px;">'
-                f'{_fmt_amt(total_loan)}</td>'
-            )
+            cells += f'<td class="td-amount">{_fmt_amt(total_loan)}</td>'
         elif key == "balance":
-            cells += (
-                f'<td style="{base}font-family:{mono_font};font-size:9px;">'
-                f'{_fmt_amt(total_balance)}</td>'
-            )
+            cells += f'<td class="td-amount">{_fmt_amt(total_balance)}</td>'
         elif key == "days":
-            cells += f'<td style="{base}font-size:8.5px;color:#8a9099;">—</td>'
+            cells += '<td class="td-days">—</td>'
         elif key == "collect":
-            cells += f'<td style="{base}min-width:70px;"></td>'
-
-    return (
-        f'<table style="margin-top:6px;border:none;">'
-        f'<tr style="background:#1a1d23;">{cells}</tr>'
-        f'</table>'
-    )
+            cells += '<td class="td-collect">—</td>'
+    return f'<table style="margin-top:8px;"><tbody><tr class="total-row">{cells}</tr></tbody></table>'
 
 
-def _footer_html(left_text: str, right_text: str, mono_font: str) -> str:
-    return (
-        f'<table style="border:none;border-top:1px solid #ccc;'
-        f'margin-top:18px;width:100%;">'
-        f'<tr>'
-        f'<td style="border:none;padding-top:8px;font-size:8px;color:#999;">{left_text}</td>'
-        f'<td style="border:none;padding-top:8px;text-align:right;'
-        f'font-size:8px;color:#999;font-family:{mono_font};">{right_text}</td>'
-        f'</tr></table>'
-    )
+def _footer_html(left_text: str, right_text: str) -> str:
+    return f"""<div class="report-footer">
+  <div class="footer-left">{left_text}</div>
+  <div class="footer-right">{right_text}</div>
+</div>"""
 
 
 def _layout_sections(blocks: list[str], two_col: bool) -> str:
@@ -299,17 +287,15 @@ def _layout_sections(blocks: list[str], two_col: bool) -> str:
         left  = blocks[i]
         right = blocks[i + 1] if i + 1 < len(blocks) else ""
         rows.append(
-            f'<table style="border:none;width:100%;'
-            f'border-collapse:separate;border-spacing:20px 0;">'
-            f'<tr>'
-            f'<td style="border:none;vertical-align:top;width:50%;">{left}</td>'
-            f'<td style="border:none;vertical-align:top;width:50%;">{right}</td>'
-            f'</tr></table>'
+            f'<div class="two-col-row">'
+            f'<div>{left}</div>'
+            f'<div>{right}</div>'
+            f'</div>'
         )
     return "\n".join(rows)
 
 
-# ── EDI daily print ─────────────────────────────────────────────────────────────
+# ── EDI endpoint ─────────────────────────────────────────────────────────────────
 
 @router.get("/edi")
 def edi_daily_print(
@@ -318,8 +304,6 @@ def edi_daily_print(
     session: Session = Depends(get_session),
     _=Depends(get_current_user),
 ):
-    import fitz  # noqa
-
     rows = session.exec(text("""
         SELECT
             c.customer_id,
@@ -337,7 +321,6 @@ def edi_daily_print(
         ORDER BY c.customer_segment_id ASC NULLS LAST, c.loan_start_date ASC, c.customer_id ASC
     """)).fetchall()
 
-    # Fetch last paid dates separately (avoids correlated subquery per row)
     customer_ids = [r.customer_id for r in rows]
     last_paid_map: dict = {}
     if customer_ids:
@@ -353,64 +336,67 @@ def edi_daily_print(
     today     = date.today()
     today_str = today.strftime("%d-%m-%Y")
     col_defs  = _parse_cols(cols)
-    font_face, body_font, mono_font = _font_css()
+    font_face, body_font, mono_font = _font_face_css()
+    css = _base_css(font_face, body_font, mono_font)
 
-    # Group by segment
+    # Add EDI-specific header CSS
+    css += f"""
+/* ── EDI Header ── */
+.header-top {{
+  display: flex; align-items: flex-end; justify-content: space-between;
+  padding-bottom: 12px; border-bottom: 2.5px solid #1a1d23; margin-bottom: 22px;
+}}
+.header-left {{ display: flex; flex-direction: column; gap: 3px; }}
+.brand-name  {{ font-size: 22px; font-weight: 700; letter-spacing: 0.5px; color: #1a1d23; }}
+.edi-badge   {{
+  display: inline-block; background: #1a1d23; color: #fff;
+  font-size: 10px; font-weight: 700; letter-spacing: 2px;
+  padding: 3px 10px; border-radius: 3px; margin-top: 2px; width: fit-content;
+}}
+.header-right {{ text-align: right; display: flex; flex-direction: column; gap: 5px; align-items: flex-end; }}
+.header-date  {{ font-family: {mono_font}; font-size: 14px; font-weight: 700; color: #1a1d23; }}
+.header-label {{ font-size: 9px; font-weight: 500; letter-spacing: 2px; color: #888; }}
+"""
+
+    # Build sections
     groups: OrderedDict = OrderedDict()
-    total_loan    = 0.0
-    total_balance = 0.0
+    total_loan = total_balance = 0.0
     for r in rows:
         key = str(r.customer_segment_id or "none")
         if key not in groups:
-            groups[key] = {
-                "label": r.grp_ta or r.grp_en or f"Group {r.customer_segment_id}",
-                "rows": [],
-            }
+            groups[key] = {"label": r.grp_ta or r.grp_en or f"Group {r.customer_segment_id}", "rows": []}
         groups[key]["rows"].append(r)
         total_loan    += float(r.loan_amount or 0)
         total_balance += float(r.outstanding_balance or 0)
 
-    # Build section blocks
     blocks = [
-        _section_block(i, g["label"], col_defs, mono_font, g["rows"], today, last_paid_map)
+        _section_block(i, g["label"], col_defs, g["rows"], today, last_paid_map)
         for i, (_, g) in enumerate(groups.items(), 1)
     ]
 
-    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
-<style>
-{font_face}
-* {{ box-sizing:border-box; margin:0; padding:0; }}
-body {{ font-family:{body_font}; color:#1a1d23; font-size:9px; line-height:1.4; }}
-table {{ border-collapse:collapse; width:100%; }}
-</style>
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>{css}</style>
 </head><body>
 
-<!-- EDI Header: brand+badge left | date right -->
-<table style="border:none;border-bottom:2px solid #1a1d23;padding-bottom:8px;margin-bottom:14px;width:100%;border-collapse:collapse;">
-  <tr>
-    <td style="border:none;vertical-align:bottom;padding-bottom:8px;">
-      <div style="font-size:15px;font-weight:700;letter-spacing:0.3px;color:#1a1d23;margin-bottom:3px;">GG Finance</div>
-      <table style="border:none;width:auto;border-collapse:separate;">
-        <tr>
-          <td style="border:none;background:#1a1d23;border-radius:2px;padding:2px 8px;font-size:8px;font-weight:700;letter-spacing:1.5px;color:#fff;">EDI</td>
-        </tr>
-      </table>
-    </td>
-    <td style="border:none;vertical-align:bottom;text-align:right;padding-bottom:8px;">
-      <div style="font-size:7.5px;font-weight:500;letter-spacing:1.5px;color:#888;margin-bottom:3px;">தினசரி வசூல் பட்டியல்</div>
-      <div style="font-family:{mono_font};font-size:11px;font-weight:700;color:#1a1d23;">{today_str}</div>
-    </td>
-  </tr>
-</table>
+<div class="header-top">
+  <div class="header-left">
+    <div class="brand-name">GG Finance</div>
+    <div class="edi-badge">EDI</div>
+  </div>
+  <div class="header-right">
+    <div class="header-label">தினசரி கணக்கு அறிக்கை</div>
+    <div class="header-date">{today_str}</div>
+  </div>
+</div>
 
 {_layout_sections(blocks, two_col)}
 
-{_grand_total_html(total_loan, total_balance, col_defs, mono_font)}
+{_grand_total_html(total_loan, total_balance, col_defs)}
 
 {_footer_html(
-    f"GG Finance · EDI · தினசரி வசூல் பட்டியல் · {today_str}",
+    f"GG Finance · EDI தினசரி அறிக்கை · {today_str}",
     f"{len(rows)} வாடிக்கையாளர்கள்",
-    mono_font,
 )}
 
 </body></html>"""
@@ -428,7 +414,7 @@ table {{ border-collapse:collapse; width:100%; }}
     )
 
 
-# ── IOP interest cadence print ──────────────────────────────────────────────────
+# ── IOP endpoint ─────────────────────────────────────────────────────────────────
 
 @router.get("/iop")
 def iop_daily_print(
@@ -437,8 +423,6 @@ def iop_daily_print(
     session: Session = Depends(get_session),
     _=Depends(get_current_user),
 ):
-    import fitz  # noqa
-
     rows = session.exec(text("""
         SELECT
             c.customer_id,
@@ -471,58 +455,63 @@ def iop_daily_print(
     today     = date.today()
     today_str = today.strftime("%d-%m-%Y")
     col_defs  = _parse_cols(cols)
-    font_face, body_font, mono_font = _font_css()
+    font_face, body_font, mono_font = _font_face_css()
+    css = _base_css(font_face, body_font, mono_font)
+
+    # Add IOP-specific header CSS
+    css += f"""
+/* ── IOP Header ── */
+.report-header   {{ border-bottom: 2.5px solid #1a1d23; padding-bottom: 14px; margin-bottom: 22px; }}
+.header-center   {{ text-align: center; }}
+.brand-name      {{ font-size: 24px; font-weight: 700; letter-spacing: 1px; color: #1a1d23; margin-bottom: 2px; }}
+.brand-sub       {{ font-size: 10px; font-weight: 500; letter-spacing: 2.5px; color: #555; margin-bottom: 6px; }}
+.header-meta-line {{
+  display: flex; justify-content: center; gap: 18px;
+  font-size: 11px; color: #444; margin-top: 6px;
+}}
+.header-meta-line span {{ border: 1px solid #ccc; border-radius: 3px; padding: 2px 10px; }}
+.header-divider  {{ height: 1px; background: #ccc; margin-top: 14px; }}
+"""
 
     groups: OrderedDict = OrderedDict()
-    total_loan    = 0.0
-    total_balance = 0.0
+    total_loan = total_balance = 0.0
     for r in rows:
         key = str(r.customer_segment_id or "none")
         if key not in groups:
-            groups[key] = {
-                "label": r.grp_ta or r.grp_en or f"Group {r.customer_segment_id}",
-                "rows": [],
-            }
+            groups[key] = {"label": r.grp_ta or r.grp_en or f"Group {r.customer_segment_id}", "rows": []}
         groups[key]["rows"].append(r)
         total_loan    += float(r.loan_amount or 0)
         total_balance += float(r.outstanding_balance or 0)
 
     blocks = [
-        _section_block(i, g["label"], col_defs, mono_font, g["rows"], today, last_paid_map)
+        _section_block(i, g["label"], col_defs, g["rows"], today, last_paid_map)
         for i, (_, g) in enumerate(groups.items(), 1)
     ]
 
-    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
-<style>
-{font_face}
-* {{ box-sizing:border-box; margin:0; padding:0; }}
-body {{ font-family:{body_font}; color:#1a1d23; font-size:9px; line-height:1.4; }}
-table {{ border-collapse:collapse; width:100%; }}
-</style>
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>{css}</style>
 </head><body>
 
-<!-- IOP Header: centered brand, subtitle, pills -->
-<div style="border-bottom:2px solid #1a1d23;padding-bottom:10px;margin-bottom:14px;">
-  <p style="font-size:15px;font-weight:700;letter-spacing:0.5px;color:#1a1d23;margin-bottom:2px;text-align:center;">GG Finance</p>
-  <p style="font-size:8px;font-weight:500;letter-spacing:1.5px;color:#555;margin-bottom:6px;text-align:center;">IOP · வட்டி வசூல் பட்டியல்</p>
-  <table style="border:none;margin-left:auto;margin-right:auto;width:auto;">
-    <tr>
-      <td style="border:1px solid #ccc;border-radius:2px;padding:2px 8px;font-size:8.5px;color:#444;">{today_str}</td>
-      <td style="border:none;width:12px;"></td>
-      <td style="border:1px solid #ccc;border-radius:2px;padding:2px 8px;font-size:8.5px;color:#444;">{len(rows)} வாடிக்கையாளர்கள்</td>
-    </tr>
-  </table>
-  <div style="height:1px;background:#ccc;margin-top:10px;"> </div>
+<div class="report-header">
+  <div class="header-center">
+    <div class="brand-name">GG Finance</div>
+    <div class="brand-sub">IOP · வட்டி வசூல் பட்டியல்</div>
+    <div class="header-meta-line">
+      <span>{today_str}</span>
+      <span>{len(rows)} வாடிக்கையாளர்கள்</span>
+    </div>
+  </div>
+  <div class="header-divider"></div>
 </div>
 
 {_layout_sections(blocks, two_col)}
 
-{_grand_total_html(total_loan, total_balance, col_defs, mono_font)}
+{_grand_total_html(total_loan, total_balance, col_defs)}
 
 {_footer_html(
     f"GG Finance · IOP · வட்டி வசூல் பட்டியல் · {today_str}",
     f"{len(rows)} வாடிக்கையாளர்கள்",
-    mono_font,
 )}
 
 </body></html>"""
