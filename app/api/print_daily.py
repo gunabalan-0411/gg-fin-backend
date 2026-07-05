@@ -423,6 +423,9 @@ def iop_daily_print(
     session: Session = Depends(get_session),
     _=Depends(get_current_user),
 ):
+    # Only show customers whose interest is due today:
+    #   (today - loan_start_date).days % frequency == 0
+    # Pure modulo — no calendar adjustment. Feb 29 / 31-day months are skipped naturally.
     rows = session.exec(text("""
         SELECT
             c.customer_id,
@@ -430,13 +433,20 @@ def iop_daily_print(
             c.loan_amount,
             c.outstanding_balance,
             c.loan_start_date,
+            c.interest_payment_frequency,
             COALESCE(nm.customer_name_ta, c.customer_name, '') AS ta_name,
             COALESCE(gm.customer_segment_name_ta, gm.customer_segment_name_en, '') AS grp_ta,
             COALESCE(gm.customer_segment_name_en, '') AS grp_en
         FROM tbl_iop_customer c
         LEFT JOIN tbl_iop_name_map nm  ON nm.customer_id = c.customer_id
         LEFT JOIN tbl_iop_group_map gm ON gm.customer_segment_id = c.customer_segment_id
-        WHERE c.is_closed = false AND COALESCE(c.ignore, false) = false
+        WHERE c.is_closed = false
+          AND COALESCE(c.ignore, false) = false
+          AND c.interest_payment_frequency IS NOT NULL
+          AND c.interest_payment_frequency > 0
+          AND c.loan_start_date IS NOT NULL
+          AND c.loan_start_date <= CURRENT_DATE
+          AND (CURRENT_DATE - c.loan_start_date) % CAST(c.interest_payment_frequency AS INTEGER) = 0
         ORDER BY c.customer_segment_id ASC NULLS LAST, c.loan_start_date ASC, c.customer_id ASC
     """)).fetchall()
 
@@ -511,7 +521,7 @@ def iop_daily_print(
 
 {_footer_html(
     f"GG Finance · IOP · வட்டி வசூல் பட்டியல் · {today_str}",
-    f"{len(rows)} வாடிக்கையாளர்கள்",
+    f"இன்று வசூல்: {len(rows)} வாடிக்கையாளர்கள்",
 )}
 
 </body></html>"""
