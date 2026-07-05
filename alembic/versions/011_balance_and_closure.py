@@ -19,20 +19,8 @@ def upgrade() -> None:
         "tbl_edi_customer",
         sa.Column("is_closed", sa.Boolean(), server_default="false", nullable=False),
     )
-    # Backfill EDI outstanding_balance from actual paid transactions
-    op.execute("""
-        UPDATE tbl_edi_customer c
-        SET outstanding_balance = (
-            COALESCE(c.loan_amount, 0) -
-            COALESCE((
-                SELECT SUM(t.amount)
-                FROM tbl_edi_transactions t
-                WHERE t.customer_id = c.customer_id
-                  AND t.payment_status = 'PAID'
-            ), 0)
-        )
-    """)
-    # Set is_closed for EDI
+    # Set is_closed from the existing stored outstanding_balance — do NOT
+    # recalculate from transactions; the stored value is the source of truth.
     op.execute("""
         UPDATE tbl_edi_customer
         SET is_closed = (outstanding_balance IS NOT NULL AND outstanding_balance <= 0)
