@@ -583,12 +583,13 @@ def _el_section_block(
             f'<span class="day-name">{day_name}</span></th>'
         )
 
+    n_date_cols = len(window)
     colgroup = (
         '<col style="width:20px"/>'
         '<col style="width:115px"/>'
         '<col style="width:68px"/>'
         '<col style="width:70px"/>'
-        + '<col style="width:26px"/>' * 10
+        + '<col style="width:26px"/>' * n_date_cols
     )
 
     rows_html = ""
@@ -658,8 +659,21 @@ def iop_daily_print(
         ORDER BY c.customer_segment_id ASC NULLS LAST, c.loan_start_date ASC, c.customer_id ASC
     """)).fetchall()
 
-    today  = date.today()
-    window = [today + timedelta(days=i) for i in range(10)]
+    today = date.today()
+    day, month, year = today.day, today.month, today.year
+
+    if day <= 10:
+        window_start_day, window_end_day = 1, 10
+    elif day <= 20:
+        window_start_day, window_end_day = 11, 20
+    else:
+        window_start_day = 21
+        window_end_day   = _cal.monthrange(year, month)[1]  # last day of month
+
+    window = [
+        date(year, month, d)
+        for d in range(window_start_day, window_end_day + 1)
+    ]
 
     # Filter to customers with at least one due date in the 10-day window.
     # Uses calendar-fixed dates: start_day, start_day+freq, ... per month,
@@ -677,8 +691,9 @@ def iop_daily_print(
         if has_due:
             el_rows.append((r, marks))
 
-    today_str      = today.strftime("%d-%m-%Y")
-    window_end_str = window[-1].strftime("%d-%m-%Y")
+    today_str        = today.strftime("%d-%m-%Y")
+    window_start_str = window[0].strftime("%d-%m-%Y")
+    window_end_str   = window[-1].strftime("%d-%m-%Y")
     font_face, body_font, mono_font = _font_face_css()
     css = _el_css(font_face, body_font, mono_font)
 
@@ -700,20 +715,21 @@ def iop_daily_print(
         for i, (_, g) in enumerate(groups.items(), 1)
     ]
 
-    total_k    = _fmt_amt(total_loan)
-    colgroup_t = (
+    n_date_cols = len(window)
+    total_k     = _fmt_amt(total_loan)
+    colgroup_t  = (
         '<col style="width:20px"/>'
         '<col style="width:115px"/>'
         '<col style="width:68px"/>'
         '<col style="width:70px"/>'
-        + '<col style="width:26px"/>' * 10
+        + '<col style="width:26px"/>' * n_date_cols
     )
     grand_total = f"""<table style="margin-top:8px;">
   <colgroup>{colgroup_t}</colgroup>
   <tbody><tr class="total-row">
     <td class="total-label" colspan="3">மொத்தம்</td>
     <td class="total-value">{total_k}</td>
-    <td colspan="10"></td>
+    <td colspan="{n_date_cols}"></td>
   </tr></tbody>
 </table>"""
 
@@ -729,7 +745,7 @@ def iop_daily_print(
   </div>
   <div class="header-right">
     <div class="header-label">வட்டி சேகரிப்பு அட்டவணை</div>
-    <div class="header-date-range">{today_str} → {window_end_str}</div>
+    <div class="header-date-range">{window_start_str} → {window_end_str}</div>
   </div>
 </div>
 
