@@ -13,6 +13,7 @@ Design matches reference ZIPs exactly:
 Column selection: ?cols=id,name,date,loan,balance,days,collect
 Two-column layout: ?two_col=true
 """
+import calendar as _cal
 import io
 import logging
 import os
@@ -419,6 +420,57 @@ def edi_daily_print(
 _TAMIL_DAYS_SHORT = ["தி", "செ", "பு", "வி", "வெ", "ச", "ஞா"]  # Mon=0 .. Sun=6
 
 
+def _is_due_el(check_date: date, loan_start_date: date, freq: int) -> bool:
+    """
+    Calendar-based IOP due-date check.
+
+    Due dates within each month are the fixed day-of-month pattern derived from
+    the loan start day:  start_day, start_day+freq, start_day+2*freq, …  (all ≤ 31)
+
+    When a nominal day exceeds the month's length the payment rolls over to
+    day (nominal - month_days) of the FOLLOWING month.
+
+    Examples (freq=10, start_day=11)  →  nominal pattern: 11, 21, 31
+      • April (30 days)  : due 11th, 21st; 31 → May 1st
+      • Feb non-leap (28): due 11th, 21st; 31 → Mar 3rd
+      • Feb leap (29)    : due 11th, 21st; 31 → Mar 2nd
+
+    Examples (freq=10, start_day=10)  →  nominal pattern: 10, 20, 30
+      • Feb non-leap (28): due 10th, 20th; 30 → Mar 2nd
+      • Feb leap (29)    : due 10th, 20th; 30 → Mar 1st
+    """
+    if check_date < loan_start_date:
+        return False
+
+    start_day = loan_start_date.day
+
+    # Nominal due days within a 31-day month
+    nominal: list[int] = []
+    d = start_day
+    while d <= 31:
+        nominal.append(d)
+        d += freq
+
+    # 1. Direct match: check_date.day is a nominal due day in its own month
+    if check_date.day in nominal:
+        return True
+
+    # 2. Overflow from the previous month:
+    #    If prev_month had fewer days than a nominal_day, that nominal_day
+    #    rolls into the current month as day (nominal_day - prev_month_days).
+    if check_date.month == 1:
+        prev_year, prev_month = check_date.year - 1, 12
+    else:
+        prev_year, prev_month = check_date.year, check_date.month - 1
+
+    prev_days = _cal.monthrange(prev_year, prev_month)[1]
+    for nd in nominal:
+        if nd > prev_days and check_date.day == nd - prev_days:
+            return True
+
+    return False
+
+
 def _el_css(font_face: str, body_font: str, mono_font: str) -> str:
     return f"""
 {font_face}
@@ -442,11 +494,12 @@ body {{ font-family: {body_font}; color: #1a1d23; font-size: 12px; }}
 .header-date-range {{ font-family: {mono_font}; font-size: 13px; font-weight: 700; color: #1a1d23; }}
 
 /* ── Section ── */
-.section-group  {{ margin-bottom: 20px; break-inside: avoid; page-break-inside: avoid; }}
+.section-group  {{ margin-bottom: 20px; }}
 .section-header {{
   display: flex; align-items: center; gap: 8px;
   margin-bottom: 5px; padding-bottom: 4px;
   border-bottom: 1.5px solid #1a1d23;
+  break-inside: avoid; page-break-inside: avoid;
 }}
 .section-number {{
   width: 20px; height: 20px; flex-shrink: 0;
@@ -495,12 +548,7 @@ td.td-mark {{
 }}
 td.td-mark.highlight {{
   background: linear-gradient(to bottom, #3a7d1e 6px, #eef8e6 6px);
-  position: relative;
-}}
-td.td-mark.highlight::after {{
-  content: ''; position: absolute;
-  bottom: 5px; left: 3px; right: 3px;
-  height: 1px; background: #5a9a3a; opacity: 0.7;
+  border-bottom: 1px solid rgba(90,154,58,0.7) !important;
 }}
 
 /* ── Grand total row ── */
@@ -614,18 +662,15 @@ def iop_daily_print(
     window = [today + timedelta(days=i) for i in range(10)]
 
     # Filter to customers with at least one due date in the 10-day window.
-    # Due date rule: (day - loan_start_date).days % frequency == 0
-    # Pure modulo — no calendar correction for short months.
+    # Uses calendar-fixed dates: start_day, start_day+freq, ... per month,
+    # with overflow handling for short months (e.g. Feb missing the 30th).
     el_rows: list = []
     for r in all_rows:
         freq    = int(r.interest_payment_frequency)
         marks   = []
         has_due = False
         for d in window:
-            if d >= r.loan_start_date:
-                is_due = (d - r.loan_start_date).days % freq == 0
-            else:
-                is_due = False
+            is_due = _is_due_el(d, r.loan_start_date, freq)
             marks.append(is_due)
             if is_due:
                 has_due = True
