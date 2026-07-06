@@ -207,6 +207,8 @@ def export_customer_pdf(
     session: Session = Depends(get_session),
     _=Depends(get_current_user),
 ):
+    is_iop = product == "iop"
+
     # ── Fetch customer + transactions ─────────────────────────────────────────
     if product == "edi":
         customer = session.get(EdiCustomer, customer_id)
@@ -230,22 +232,38 @@ def export_customer_pdf(
     loan_amount  = float(customer.loan_amount or 0)
     loan_year    = str(loan_start.year) if loan_start else "—"
 
-    # ── Only PAID transactions sorted by date ────────────────────────────────
+    # ── Totals ────────────────────────────────────────────────────────────────
     paid_txns = sorted(
         [t for t in txns if t.payment_status == "PAID"],
         key=lambda t: str(t.collection_date or ""),
     )
-    n           = len(paid_txns)
-    total_paid  = sum(float(t.amount) for t in paid_txns)
-    outstanding = loan_amount - total_paid
+    n          = len(paid_txns)
+    total_paid = sum(float(t.amount) for t in paid_txns)
+
+    if is_iop:
+        # IOP: transactions are interest-only; balance = principal - principal_paid
+        principal_paid = float(getattr(customer, "principal_paid", 0) or 0)
+        outstanding    = loan_amount - principal_paid
+    else:
+        # EDI: transactions reduce the principal directly
+        outstanding = loan_amount - total_paid
 
     # ── Summary strip ─────────────────────────────────────────────────────────
-    summary_cells = [
-        ("கடன் தொடங்கிய",   _fmt_date(loan_start), False),
-        ("கடன் தொகை",       _fmt_amt(loan_amount),  False),
-        ("மொத்த செலுத்தல்", _fmt_amt(total_paid),   False),
-        ("நிலுவை தொகை",     _fmt_amt(outstanding),  True),   # dark highlight
-    ]
+    if is_iop:
+        summary_cells = [
+            ("கடன் தொடங்கிய",     _fmt_date(loan_start), False),
+            ("கடன் தொகை",         _fmt_amt(loan_amount),  False),
+            ("மொத்த வட்டி",        _fmt_amt(total_paid),   False),
+            ("நிலுவை தொகை",       _fmt_amt(outstanding),  True),
+        ]
+    else:
+        summary_cells = [
+            ("கடன் தொடங்கிய",    _fmt_date(loan_start), False),
+            ("கடன் தொகை",        _fmt_amt(loan_amount),  False),
+            ("மொத்த செலுத்தல்",  _fmt_amt(total_paid),   False),
+            ("நிலுவை தொகை",      _fmt_amt(outstanding),  True),
+        ]
+
     summary_cells_html = "".join(
         f'<td class="{"highlight" if hi else ""}">'
         f'<div class="s-label">{lbl}</div>'
@@ -254,39 +272,110 @@ def export_customer_pdf(
         for lbl, val, hi in summary_cells
     )
 
-    # ── Transaction rows with year-band separators and running balance ────────
-    rows_html       = ""
-    running_balance = loan_amount
-    current_year    = None
+    # ── Transaction rows ──────────────────────────────────────────────────────
+    rows_html    = ""
+    current_year = None
+    num_cols     = 4 if is_iop else 5   # IOP has no balance column
 
-    for idx, t in enumerate(paid_txns, 1):
-        amt             = float(t.amount)
-        running_balance -= amt
-        txn_year = str(t.collection_date.year) if t.collection_date else ""
+    if is_iop:
+        # IOP: interest payments only — date, amount, method (no running balance)
+        for idx, t in enumerate(paid_txns, 1):
+            amt      = float(t.amount)
+            txn_year = str(t.collection_date.year) if t.collection_date else ""
 
-        if txn_year and txn_year != current_year:
-            rows_html   += f'<tr class="year-band"><td colspan="5">{txn_year}</td></tr>\n'
-            current_year = txn_year
+            if txn_year and txn_year != current_year:
+                rows_html   += f'<tr class="year-band"><td colspan="{num_cols}">{txn_year}</td></tr>\n'
+                current_year = txn_year
 
-        badge = _method_badge(t.payment_mode or "")
-        rows_html += (
-            f'<tr>'
-            f'<td class="td-num">{idx}</td>'
-            f'<td class="td-date">{_fmt_date(t.collection_date)}</td>'
-            f'<td class="td-amount">{_fmt_amt(amt)}</td>'
-            f'<td class="td-method">{badge}</td>'
-            f'<td class="td-balance">{_fmt_amt(running_balance)}</td>'
-            f'</tr>\n'
+            badge = _method_badge(t.payment_mode or "")
+            rows_html += (
+                f'<tr>'
+                f'<td class="td-num">{idx}</td>'
+                f'<td class="td-date">{_fmt_date(t.collection_date)}</td>'
+                f'<td class="td-amount">{_fmt_amt(amt)}</td>'
+                f'<td class="td-method">{badge}</td>'
+                f'</tr>\n'
+            )
+    else:
+        # EDI: payments reduce principal — show running balance column
+        running_balance = loan_amount
+        for idx, t in enumerate(paid_txns, 1):
+            amt             = float(t.amount)
+            running_balance -= amt
+            txn_year = str(t.collection_date.year) if t.collection_date else ""
+
+            if txn_year and txn_year != current_year:
+                rows_html   += f'<tr class="year-band"><td colspan="{num_cols}">{txn_year}</td></tr>\n'
+                current_year = txn_year
+
+            badge = _method_badge(t.payment_mode or "")
+            rows_html += (
+                f'<tr>'
+                f'<td class="td-num">{idx}</td>'
+                f'<td class="td-date">{_fmt_date(t.collection_date)}</td>'
+                f'<td class="td-amount">{_fmt_amt(amt)}</td>'
+                f'<td class="td-method">{badge}</td>'
+                f'<td class="td-balance">{_fmt_amt(running_balance)}</td>'
+                f'</tr>\n'
+            )
+
+    # ── Table header labels ───────────────────────────────────────────────────
+    if is_iop:
+        section_title = "வட்டி விவரங்கள்"
+        count_label   = f"{n} பரிவர்த்தனைகள்"
+        col_headers   = """
+      <th class="th-center">#</th>
+      <th>தேதி</th>
+      <th class="th-right">வட்டி தொகை</th>
+      <th>முறை</th>"""
+        colgroup      = """
+    <col style="width:22px"/>
+    <col style="width:82px"/>
+    <col style="width:90px"/>
+    <col style="width:90px"/>"""
+        total_row = (
+            f'<tr class="total-row">'
+            f'<td colspan="2" class="total-label">மொத்தம் · {n} பரிவர்த்தனைகள்</td>'
+            f'<td class="total-value">{_fmt_amt(total_paid)}</td>'
+            f'<td></td>'
+            f'</tr>'
         )
+    else:
+        section_title = "பரிவர்த்தனை விவரங்கள்"
+        count_label   = f"{n} பரிவர்த்தனைகள்"
+        col_headers   = """
+      <th class="th-center">#</th>
+      <th>தேதி</th>
+      <th class="th-right">தொகை</th>
+      <th>முறை</th>
+      <th class="th-right">நிலுவை</th>"""
+        colgroup      = """
+    <col style="width:22px"/>
+    <col style="width:82px"/>
+    <col style="width:72px"/>
+    <col style="width:90px"/>
+    <col style="width:72px"/>"""
+        total_row = (
+            f'<tr class="total-row">'
+            f'<td colspan="2" class="total-label">மொத்தம் · {n} பரிவர்த்தனைகள்</td>'
+            f'<td class="total-value">{_fmt_amt(total_paid)}</td>'
+            f'<td></td>'
+            f'<td class="total-balance">{_fmt_amt(outstanding)}</td>'
+            f'</tr>'
+        )
+
+    # ── Badge label for product ───────────────────────────────────────────────
+    product_badge = "IOP · INTEREST" if is_iop else "TRANSACTIONS"
+    report_label  = "வட்டி அறிக்கை" if is_iop else "கடன் பரிவர்த்தனை அறிக்கை"
 
     # ── Footer ────────────────────────────────────────────────────────────────
     start_str    = _fmt_date(loan_start)
     footer_left  = f"GG Finance · {display_name} · {start_str} முதல்"
-    footer_right = f"கடன் #TX-{loan_year}"
+    footer_right = f"கடன் #{'IOP' if is_iop else 'TX'}-{loan_year}"
 
     # ── Assemble HTML ─────────────────────────────────────────────────────────
     font_face, body_font, mono_font = _font_face_css()
-    css  = _tx_css(font_face, body_font, mono_font)
+    css = _tx_css(font_face, body_font, mono_font)
 
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -296,10 +385,10 @@ def export_customer_pdf(
 <div class="header-top">
   <div class="header-left">
     <div class="brand-name">GG Finance</div>
-    <div class="tx-badge">TRANSACTIONS</div>
+    <div class="tx-badge">{product_badge}</div>
   </div>
   <div class="header-right">
-    <div class="header-label">கடன் பரிவர்த்தனை அறிக்கை</div>
+    <div class="header-label">{report_label}</div>
     <div class="customer-name">{display_name}</div>
   </div>
 </div>
@@ -309,35 +398,18 @@ def export_customer_pdf(
 </table>
 
 <div class="table-header">
-  <div class="table-title">பரிவர்த்தனை விவரங்கள்</div>
-  <div class="tx-count">{n} பரிவர்த்தனைகள்</div>
+  <div class="table-title">{section_title}</div>
+  <div class="tx-count">{count_label}</div>
 </div>
 
 <table class="tx-table">
-  <colgroup>
-    <col style="width:22px"/>
-    <col style="width:82px"/>
-    <col style="width:72px"/>
-    <col style="width:90px"/>
-    <col style="width:72px"/>
-  </colgroup>
+  <colgroup>{colgroup}</colgroup>
   <thead>
-    <tr>
-      <th class="th-center">#</th>
-      <th>தேதி</th>
-      <th class="th-right">தொகை</th>
-      <th>முறை</th>
-      <th class="th-right">நிலுவை</th>
-    </tr>
+    <tr>{col_headers}</tr>
   </thead>
   <tbody>
     {rows_html}
-    <tr class="total-row">
-      <td colspan="2" class="total-label">மொத்தம் · {n} பரிவர்த்தனைகள்</td>
-      <td class="total-value">{_fmt_amt(total_paid)}</td>
-      <td></td>
-      <td class="total-balance">{_fmt_amt(outstanding)}</td>
-    </tr>
+    {total_row}
   </tbody>
 </table>
 
