@@ -199,16 +199,15 @@ def _build_gmail_service(g: GmailSettings, session: Session):
 
 # ── Gmail sync ────────────────────────────────────────────────────────────────
 
-def sync_gmail(session: Session) -> dict:
-    """Fetch HDFC credit emails from last 1 year and import UPI transactions."""
+def sync_gmail(session: Session, days_back: int = 7) -> dict:
+    """Fetch HDFC credit emails from last N days and import UPI transactions."""
     g = session.get(GmailSettings, 1)
     if not g or not g.access_token:
         raise ValueError("Gmail not connected.")
 
     gmail = _build_gmail_service(g, session)
 
-    # Fetch HDFC credit emails from last 1 year — paginate to get all results
-    after_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y/%m/%d")
+    after_date = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime("%Y/%m/%d")
     query = f"from:hdfcbank credited after:{after_date}"
 
     messages = []
@@ -265,7 +264,7 @@ def sync_gmail(session: Session) -> dict:
     return {"imported": imported, "skipped": skipped, "total_found": len(messages)}
 
 
-def sync_gmail_stream(session: Session):
+def sync_gmail_stream(session: Session, days_back: int = 7):
     """Generator that yields SSE-formatted progress events for the sync operation."""
     import json
 
@@ -283,7 +282,7 @@ def sync_gmail_stream(session: Session):
         yield _event({"error": str(e)})
         return
 
-    after_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y/%m/%d")
+    after_date = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime("%Y/%m/%d")
     query = f"from:hdfcbank credited after:{after_date}"
 
     # Paginate to collect all message refs first

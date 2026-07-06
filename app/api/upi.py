@@ -107,12 +107,13 @@ def gmail_debug_emails(
 
 @router.post("/gmail/sync")
 def gmail_sync(
+    days_back: int = Query(default=7, ge=1, le=365),
     session: Session = Depends(get_session),
     _=Depends(get_current_user),
 ):
-    """Fetch last-year HDFC credit emails and import UPI transactions."""
+    """Fetch HDFC credit emails and import UPI transactions."""
     try:
-        result = upi_service.sync_gmail(session)
+        result = upi_service.sync_gmail(session, days_back=days_back)
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -124,12 +125,13 @@ def gmail_sync(
 
 @router.get("/gmail/sync-stream")
 def gmail_sync_stream(
+    days_back: int = Query(default=7, ge=1, le=365),
     session: Session = Depends(get_session),
     _=Depends(get_current_user),
 ):
     """SSE endpoint — streams per-email progress while syncing Gmail."""
     return StreamingResponse(
-        upi_service.sync_gmail_stream(session),
+        upi_service.sync_gmail_stream(session, days_back=days_back),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
