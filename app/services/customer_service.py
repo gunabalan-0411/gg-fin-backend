@@ -51,7 +51,6 @@ class EdiCustomerService:
                 .where(EdiTransaction.payment_status == "PAID")
             ).one()
             update_data["outstanding_balance"] = new_loan - Decimal(str(paid_sum))
-            update_data["is_closed"] = update_data["outstanding_balance"] <= 0
         return self.repo.update(customer, update_data)
 
     def delete(self, customer_id: int) -> bool:
@@ -106,9 +105,8 @@ class IopCustomerService:
         update_data = payload.model_dump(exclude_none=True)
         new_loan = update_data.get("loan_amount", customer.loan_amount)
         new_paid = update_data.get("principal_paid", customer.principal_paid)
-        balance, closed = self._iop_balance(new_loan, new_paid)
+        balance, _ = self._iop_balance(new_loan, new_paid)
         update_data["outstanding_balance"] = balance
-        update_data["is_closed"] = closed
         return self.repo.update(customer, update_data)
 
     def delete(self, customer_id: int) -> bool:
