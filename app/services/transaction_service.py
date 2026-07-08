@@ -22,7 +22,6 @@ def _sync_edi_balance(session: Session, customer_id: int) -> None:
         .where(EdiTransaction.payment_status == "PAID")
     ).one()
     customer.outstanding_balance = (customer.loan_amount or Decimal(0)) - Decimal(str(paid_sum))
-    customer.is_closed = customer.outstanding_balance <= 0
     session.add(customer)
 
 
