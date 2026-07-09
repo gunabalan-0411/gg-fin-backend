@@ -1,3 +1,5 @@
+import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select, col
 
@@ -23,15 +25,60 @@ def _total_repaid(session: Session, debt_id: int) -> float:
     return float(sum(r.amount for r in rows))
 
 
+def _balance_ref_date() -> datetime.date:
+    """Most recent 5th-of-month on or before today."""
+    today = datetime.date.today()
+    if today.day >= 5:
+        return today.replace(day=5)
+    if today.month == 1:
+        return datetime.date(today.year - 1, 12, 5)
+    return today.replace(month=today.month - 1, day=5)
+
+
+def _emi_balance(debt: Debt, as_of: datetime.date) -> float:
+    """Outstanding balance via PV-of-remaining-payments amortization formula."""
+    r = float(debt.interest_rate_pa) / 12 / 100
+    n = debt.tenure_months
+    pmt = float(debt.emi_amount)
+    start = debt.date
+
+    emis_paid = (as_of.year - start.year) * 12 + (as_of.month - start.month)
+    emis_paid = max(0, min(emis_paid, n))
+    n_remaining = n - emis_paid
+
+    if n_remaining <= 0:
+        return 0.0
+    if r == 0:
+        return round(pmt * n_remaining, 2)
+    return round(pmt * (1 - (1 + r) ** (-n_remaining)) / r, 2)
+
+
 def _debt_to_dict(debt: Debt, session: Session) -> dict:
     total_repaid = _total_repaid(session, debt.id)
+
+    has_emi_data = (
+        debt.emi_amount is not None
+        and debt.interest_rate_pa is not None
+        and debt.tenure_months is not None
+    )
+    if has_emi_data:
+        balance = _emi_balance(debt, _balance_ref_date())
+    else:
+        balance = float(debt.amount) - total_repaid
+
     return {
         "id": debt.id,
         "date": str(debt.date),
         "lender_name": debt.lender_name,
+        "borrower_name": debt.borrower_name,
         "amount": float(debt.amount),
+        "emi_amount": float(debt.emi_amount) if debt.emi_amount is not None else None,
+        "interest_rate_pa": float(debt.interest_rate_pa) if debt.interest_rate_pa is not None else None,
+        "tenure_months": debt.tenure_months,
+        "end_date": str(debt.end_date) if debt.end_date else None,
+        "paid_by": debt.paid_by,
         "total_repaid": total_repaid,
-        "balance": float(debt.amount) - total_repaid,
+        "balance": balance,
         "notes": debt.notes,
     }
 
@@ -67,7 +114,13 @@ def create_debt(
     debt = Debt(
         date=data["date"],
         lender_name=data["lender_name"],
+        borrower_name=data.get("borrower_name"),
         amount=data["amount"],
+        emi_amount=data.get("emi_amount"),
+        interest_rate_pa=data.get("interest_rate_pa"),
+        tenure_months=data.get("tenure_months"),
+        end_date=data.get("end_date"),
+        paid_by=data.get("paid_by"),
         notes=data.get("notes"),
     )
     session.add(debt)
@@ -86,7 +139,8 @@ def update_debt(
     debt = session.get(Debt, debt_id)
     if not debt:
         raise HTTPException(status_code=404, detail="Debt not found")
-    for field in ("date", "lender_name", "amount", "notes"):
+    for field in ("date", "lender_name", "borrower_name", "amount", "emi_amount",
+                  "interest_rate_pa", "tenure_months", "end_date", "paid_by", "notes"):
         if field in data:
             setattr(debt, field, data[field])
     session.add(debt)
