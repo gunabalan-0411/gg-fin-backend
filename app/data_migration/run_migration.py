@@ -95,6 +95,11 @@ def run():
         bulk_insert(session, IopTransaction, df_iop_txn)
         bulk_insert(session, Expense, df_expense)
 
+    # Customers were bulk-loaded: make sure the alias / AI-mismatch mapping triggers exist and every pointer is current.
+    from app.db import mapping_schema
+    repointed = mapping_schema.ensure(engine)
+    print(f"Name mappings checked ({repointed} pointer(s) re-pointed)")
+
     print("\nMigration complete!")
 
 

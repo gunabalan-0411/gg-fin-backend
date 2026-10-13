@@ -1,3 +1,4 @@
+import logging
 import os
 import subprocess
 import tempfile
@@ -13,6 +14,7 @@ from app.api.deps import get_current_user
 from app.core.config import settings as app_settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # In-memory job store (per-process, fine for single-user app)
 _jobs: dict[str, dict] = {}
@@ -36,6 +38,25 @@ def _psql(db: dict, sql: str) -> subprocess.CompletedProcess:
          "-d", db["dbname"], "-c", sql],
         env=env, capture_output=True, text=True,
     )
+
+
+def _repair_name_mappings() -> str | None:
+    """
+    After a restore, make sure the alias / AI-mismatch tables, triggers and views exist and every pointer is current.
+
+    Restoring an older dump (`pg_dump --clean`) drops and re-creates the customer tables, which also drops the
+    triggers that keep the mapping tables in step. Returns a warning text on failure, None on success.
+    """
+    try:
+        from app.core.database import engine
+        from app.db import mapping_schema
+
+        repointed = mapping_schema.ensure(engine)
+        logger.info("Name mappings repaired after restore (%d pointer(s) re-pointed)", repointed)
+        return None
+    except Exception as exc:  # the restore itself succeeded — report, don't fail it
+        logger.exception("Name-mapping repair after restore failed")
+        return f"name-mapping repair failed: {exc}"
 
 
 # ── Export ────────────────────────────────────────────────────────────────
@@ -164,9 +185,12 @@ END $$;
 """
         _psql(db, validate_sql)
 
+        _jobs[job_id] = {"progress": 95, "status": "running", "message": "Repairing name mappings…"}
+        warning = _repair_name_mappings()
+
         _jobs[job_id] = {
             "progress": 100, "status": "done",
-            "message": f"Restored from {filename}",
+            "message": f"Restored from {filename}" + (f" — WARNING: {warning}" if warning else ""),
         }
 
     except Exception as e:

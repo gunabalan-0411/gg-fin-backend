@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from typing import Optional
 
@@ -10,10 +11,13 @@ from app.api.deps import get_current_user
 from app.core.database import get_session
 from app.models.customer import EdiCustomer, IopCustomer
 from app.models.mapping import EdiNameMap, IopNameMap
-from app.services import ocr_service
+from app.schemas.name_mapping import MappingRef
+from app.services import name_mapping_service, ocr_service
+from app.services.mapping_matcher import HIGH_CONFIDENCE
 from app.services.transaction_service import EdiTransactionService, IopTransactionService
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 
 _ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
@@ -112,15 +116,58 @@ async def extract_page(
     except Exception as exc:
         raise HTTPException(500, f"Extraction failed: {exc}")
 
+    # Alias / AI-mismatch mappings are loaded once for the whole page. If they cannot be read (e.g. migration not
+    # applied) OCR keeps working with the plain fuzzy match and the response carries a visible warning.
+    mapping_index = None
+    mapping_warning = None
+    try:
+        mapping_index = name_mapping_service.MappingIndex(session)
+    except Exception as exc:
+        session.rollback()
+        log.exception("Name-mapping lookup unavailable during OCR extract")
+        mapping_warning = f"Alias / AI-mismatch matching is unavailable: {exc.__class__.__name__}"
+
     for rec in records:
         product = (rec.get("product_type") or "EDI").upper()
+        ftype = "IOP" if product == "IOP" else "EDI"
         pool = iop_list if product == "IOP" else edi_list
-        matches = ocr_service.fuzzy_match(rec.get("customer_name", ""), pool)
+        name = rec.get("customer_name", "")
+
+        # Step 1 — existing fuzzy match on active customer names (unchanged); column 1 of the dropdown
+        matches = ocr_service.fuzzy_match(name, pool)
         rec["customer_suggestions"] = matches
         best = matches[0] if matches else None
-        rec["customer_id"] = best["id"] if best and best["score"] >= 0.90 else None
 
-    return {"page_image_b64": page_b64, "records": records}
+        # Column 2 — alias / AI-mismatch candidates, always computed so the user can open the dropdown and choose
+        mapped, auto = ([], None)
+        if mapping_index is not None:
+            try:
+                mapped, auto = mapping_index.suggest(ftype, name)
+            except Exception:
+                session.rollback()
+                log.exception("Name-mapping lookup failed for %r", name)
+        rec["mapping_suggestions"] = [c.to_dict() for c in mapped]
+        rec["match_source"] = None
+        rec["mapping_ref"] = None
+        rec["matched_customer_name"] = None
+
+        if best and best["score"] >= HIGH_CONFIDENCE:
+            # High confidence: stop here, no mapping lookup — the user decides from the dropdown (R-02)
+            rec["customer_id"] = best["id"]
+            rec["match_source"] = "fuzzy"
+        else:
+            rec["customer_id"] = None
+            if auto is not None:
+                # Steps 2 & 3 — AI-mismatch first, then 2nd alias (both at the same 0.90 threshold)
+                rec["customer_id"] = auto.customer_id
+                rec["match_source"] = auto.source
+                rec["mapping_ref"] = {"kind": auto.source, "id": auto.mapping_id}
+                rec["matched_customer_name"] = auto.customer_name
+
+    resp = {"page_image_b64": page_b64, "records": records}
+    if mapping_warning:
+        resp["mapping_warning"] = mapping_warning
+    return resp
 
 
 class OcrRecord(BaseModel):
@@ -131,6 +178,7 @@ class OcrRecord(BaseModel):
     payment_mode: str
     is_paid: bool = True
     amount: int
+    mapping_ref: Optional[MappingRef] = None   # set when the customer was picked through an alias / AI-mismatch entry
 
 
 class SubmitRequest(BaseModel):
@@ -144,6 +192,7 @@ def submit_records(
     _=Depends(get_current_user),
 ):
     saved = 0
+    usage_refs: list[dict] = []
     for rec in body.records:
         if not rec.customer_id or not rec.amount:
             continue
@@ -151,11 +200,19 @@ def submit_records(
             col_date = datetime.strptime(rec.collection_date, "%d-%m-%Y").date()
         except ValueError:
             continue
-        svc = (
-            IopTransactionService(session)
-            if rec.product_type.upper() == "IOP"
-            else EdiTransactionService(session)
-        )
+        is_iop = rec.product_type.upper() == "IOP"
+        svc = IopTransactionService(session) if is_iop else EdiTransactionService(session)
         svc.upsert(rec.customer_id, col_date, rec.amount, rec.payment_mode, rec.is_paid)
         saved += 1
-    return {"submitted": saved}
+        if rec.mapping_ref:                       # only rows that were really saved count as a "use" (R-30)
+            usage_refs.append({"kind": rec.mapping_ref.kind, "mapping_id": rec.mapping_ref.id,
+                               "finance_type": "IOP" if is_iop else "EDI", "customer_id": rec.customer_id})
+
+    usage_counted = 0
+    if usage_refs:
+        try:
+            usage_counted = name_mapping_service.record_usage(session, usage_refs)
+        except Exception:                         # the collections are already saved — never fail the submit over a counter
+            session.rollback()
+            log.exception("Could not record alias / AI-mismatch usage")
+    return {"submitted": saved, "mapping_usage": usage_counted}

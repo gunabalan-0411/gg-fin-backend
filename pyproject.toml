@@ -28,6 +28,11 @@ python-dotenv = "^1.0.1"
 pytest = "^8.0.0"
 httpx = "^0.28.0"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

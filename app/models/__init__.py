@@ -6,6 +6,7 @@ from app.models.debt import Debt, DebtRepayment
 from app.models.unclaimed_balance import UnclaimedBalance
 from app.models.defaulted_balance import DefaultedBalance
 from app.models.mapping import EdiNameMap, EdiGroupMap, IopNameMap, IopGroupMap
+from app.models.customer_mapping import CustomerAlias, CustomerAiMismatch
 from app.models.backup import BackupSettings
 from app.models.upi import UpiTransaction, GmailSettings, UpiVpaMapping, DriveSettings
 
@@ -19,6 +20,7 @@ __all__ = [
     "DefaultedBalance",
     "EdiNameMap", "EdiGroupMap",
     "IopNameMap", "IopGroupMap",
+    "CustomerAlias", "CustomerAiMismatch",
     "BackupSettings",
     "UpiTransaction", "GmailSettings", "UpiVpaMapping", "DriveSettings",
 ]
