@@ -113,3 +113,56 @@ def test_app_startup_on_top_of_the_migrated_schema_is_a_noop(fresh_db):
     assert r.returncode == 0, r.stdout + r.stderr
     assert "TRIGGERS 6" in r.stdout
     assert "Could not install" not in r.stderr
+
+
+def test_migration_steps_succeed_when_the_role_may_not_create_extensions():
+    """
+    Production roles may lack CREATE on the database, so `CREATE EXTENSION pg_trgm` can really fail. The optional extension
+    step must fail softly INSIDE the same transaction Alembic uses, and everything else must still be installed.
+    (A real permission failure — not a simulated one.)
+    """
+    from sqlalchemy import create_engine, text
+
+    from app.db import mapping_schema
+
+    db = "ggtest_perm"
+    admin = _connect("postgres")
+    cur = admin.cursor()
+    cur.execute(f"DROP DATABASE IF EXISTS {db} WITH (FORCE)")
+    cur.execute("DROP ROLE IF EXISTS ggtest_limited")
+    cur.execute("CREATE ROLE ggtest_limited LOGIN PASSWORD 'x' NOSUPERUSER NOCREATEDB NOCREATEROLE")
+    cur.execute(f"CREATE DATABASE {db}")
+    admin.close()
+    try:
+        adm = _connect(db)
+        c = adm.cursor()
+        c.execute(f"REVOKE CREATE ON DATABASE {db} FROM PUBLIC")                 # no CREATE on the database -> no extensions
+        c.execute(f"GRANT CONNECT ON DATABASE {db} TO ggtest_limited")
+        c.execute("ALTER SCHEMA public OWNER TO ggtest_limited")
+        c.execute("SET ROLE ggtest_limited")
+        for t in ("tbl_edi_customer", "tbl_iop_customer"):
+            c.execute(f"CREATE TABLE {t} (customer_id integer PRIMARY KEY, customer_name varchar, is_closed boolean NOT NULL DEFAULT false)")
+        adm.close()
+
+        p = urlparse(TEST_URL)
+        eng = create_engine(f"postgresql://ggtest_limited:x@{p.hostname}:{p.port or 5432}/{db}")
+        with eng.begin() as conn:                                                # ONE transaction, like `alembic upgrade`
+            assert conn.execute(text(f"SELECT has_database_privilege(current_user, '{db}', 'CREATE')")).scalar() is False
+            mapping_schema.create_tables(conn)
+            mapping_schema.apply(conn)                                           # includes the optional pg_trgm step
+            mapping_schema.resync_all(conn)                                      # statements AFTER the failed savepoint still work
+            conn.execute(text("INSERT INTO tbl_customer_alias (finance_type, customer_name, alias_name) VALUES ('EDI','X','x')"))
+        with eng.connect() as conn:
+            count = lambda sql: conn.execute(text(sql)).scalar()                 # noqa: E731
+            assert count("SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'trg_ggfin_%'") == 6
+            assert count("SELECT count(*) FROM pg_proc WHERE proname LIKE 'fn_ggfin_%'") == 5
+            assert count("SELECT count(*) FROM information_schema.views WHERE table_name LIKE 'vw_customer_%'") == 2
+            assert count("SELECT count(*) FROM pg_extension WHERE extname = 'pg_trgm'") == 0     # the extension really was refused
+            conn.execute(text("SELECT 1"))
+        eng.dispose()
+    finally:
+        admin = _connect("postgres")
+        cur = admin.cursor()
+        cur.execute(f"DROP DATABASE IF EXISTS {db} WITH (FORCE)")
+        cur.execute("DROP ROLE IF EXISTS ggtest_limited")
+        admin.close()
