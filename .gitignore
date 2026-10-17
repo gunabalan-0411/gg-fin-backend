@@ -17,6 +17,12 @@ htmlcov/
 .env.*
 !.env.example
 
+# local-only data (anchored to the repo root so app/models/ is NOT ignored)
+# - Whisper model: the deployed app fetches its own copy at start-up; download_model.py can recreate this one locally
+# - dataset/: voice recordings made while running locally (the deployed app keeps them in /app/dataset)
+/models/whisper-small/
+/dataset/
+
 # logs
 *.log
 
