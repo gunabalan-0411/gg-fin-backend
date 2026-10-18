@@ -31,6 +31,7 @@ DATA_TABLES = [
     "tbl_edi_customer", "tbl_iop_customer",
     "tbl_edi_name_map", "tbl_iop_name_map",
     "tbl_edi_transactions", "tbl_iop_transactions",
+    "tbl_upi_transactions", "tbl_upi_vpa_mappings", "tbl_drive_settings",
 ]
 
 

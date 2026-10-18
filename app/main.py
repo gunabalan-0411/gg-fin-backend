@@ -5,7 +5,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, backup, customers, dashboard, dataset, debts, defaulted_balances, drive, export, expenses, investors, name_mappings, namemap, setup, sql, transactions, unclaimed_balances, voice, upi
+from app.api import auth, backup, customers, dashboard, debts, defaulted_balances, drive, export, expenses, investors, name_mappings, namemap, setup, sql, training_data, transactions, unclaimed_balances, voice, upi
 from app.core.database import init_db
 from app.core.config import settings
 
@@ -82,7 +82,7 @@ except Exception as _ocr_err:
 app.include_router(backup.router, prefix="/api/backup", tags=["backup"])
 app.include_router(namemap.router, prefix="/api/namemap", tags=["namemap"])
 app.include_router(name_mappings.router, prefix="/api/name-mappings", tags=["name-mappings"])
-app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
+app.include_router(training_data.router, prefix="/api/training-data", tags=["training-data"])
 app.include_router(upi.router, prefix="/api/upi", tags=["upi"])
 app.include_router(drive.router, prefix="/api/drive", tags=["drive"])
 app.include_router(debts.router, prefix="/api/debts", tags=["debts"])
