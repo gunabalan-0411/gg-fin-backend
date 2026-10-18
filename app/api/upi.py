@@ -7,7 +7,8 @@ from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.database import get_session
 from app.models.upi import UpiTransaction, UpiVpaMapping
-from app.services import upi_service
+from app.schemas.upi_pairing import ApplyPairingsRequest, MoveVpaMappingsRequest
+from app.services import upi_mapping_service, upi_service
 
 router = APIRouter()
 
@@ -339,11 +340,44 @@ def fuzzy_suggest(
 
 @router.get("/vpa-mappings")
 def list_vpa_mappings(
+    customer_id: Optional[int] = None,
+    customer_type: Optional[str] = None,
     session: Session = Depends(get_session),
     _=Depends(get_current_user),
 ):
-    rows = session.exec(select(UpiVpaMapping)).all()
+    q = select(UpiVpaMapping)
+    if customer_id is not None:
+        q = q.where(UpiVpaMapping.customer_id == customer_id)
+    if customer_type:
+        q = q.where(UpiVpaMapping.customer_type == customer_type.strip().lower())
+    rows = session.exec(q).all()
     return {"data": rows}
+
+
+@router.post("/vpa-mappings/apply-pairings")
+def apply_pairings(
+    body: ApplyPairingsRequest,
+    session: Session = Depends(get_session),
+    _=Depends(get_current_user),
+):
+    """Save the UPI transactions the OCR page paired with customers (UPI id -> customer, for future auto-mapping)."""
+    return upi_mapping_service.apply_pairings(session, body.pairings)
+
+
+@router.post("/vpa-mappings/move")
+def move_vpa_mappings(
+    body: MoveVpaMappingsRequest,
+    session: Session = Depends(get_session),
+    _=Depends(get_current_user),
+):
+    """Move an account's saved UPI ids to another account of the same product (closed <-> open only)."""
+    try:
+        moved = upi_mapping_service.move_vpa_mappings(session, body.customer_type, body.from_customer_id, body.to_customer_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"moved": moved}
 
 
 @router.post("/vpa-mappings", status_code=201)
