@@ -67,6 +67,23 @@ async def get_page_image(
     return {"page_image_b64": page_b64}
 
 
+@router.get("/page/{session_id}/{page_index}/ink")
+async def get_page_ink(
+    session_id: str,
+    page_index: int,
+    _=Depends(get_current_user),
+):
+    """The page's ink for the scan animation: `{width, height, mask_png_b64, blobs: [[x, y, w, h], ...], coverage}` (OpenCV)."""
+    try:
+        return await run_in_threadpool(ocr_service.get_page_ink, session_id, page_index)
+    except FileNotFoundError:
+        raise HTTPException(404, "OCR session not found or expired — please re-upload the PDF")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to analyse the page: {exc}")
+
+
 class ExtractRequest(BaseModel):
     session_id: str
     page_index: int

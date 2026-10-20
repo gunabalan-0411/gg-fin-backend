@@ -210,6 +210,12 @@ def preprocess_remaining_pages(session_id: str, total_pages: int) -> None:
             log.warning("Background: page %d failed: %s", page_index, exc)
 
 
+def get_page_ink(session_id: str, page_index: int) -> dict:
+    """Where the ink is on this page (for the "reading" animation): ink mask + one box per character. Computed from the page image, not stored."""
+    from app.services import ink_service
+    return ink_service.cached_ink((session_id, page_index), lambda: _get_page_bytes(session_id, page_index)[0])
+
+
 def get_page_image_b64(session_id: str, page_index: int) -> str:
     """
     Return base64-encoded image for display.
