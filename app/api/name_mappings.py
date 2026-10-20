@@ -37,9 +37,11 @@ def get_customer_mappings(
 
 @router.post("/check")
 def check_words(body: CheckRequest, session: Session = Depends(get_session), _=Depends(get_current_user)):
-    """Which of these words are already mapped to ANOTHER active customer?"""
-    conflicts = _run(lambda: svc.check(session, body.finance_type, body.customer_id, [i.model_dump() for i in body.items]))
-    return {"conflicts": conflicts}
+    """Which of these words are already mapped to ANOTHER active customer, and which look like a customer's name (90%+)?"""
+    items = [i.model_dump() for i in body.items]
+    conflicts = _run(lambda: svc.check(session, body.finance_type, body.customer_id, items))
+    similar = _run(lambda: svc.check_similar(session, body.finance_type, body.customer_id, items))
+    return {"conflicts": conflicts, "similar": similar}
 
 
 @router.put("/customer")
@@ -47,13 +49,13 @@ def save_customer_mappings(body: SaveRequest, session: Session = Depends(get_ses
     """The popup's Save: replace the customer's lists. 422 over the limit, 409 for an unresolved conflict."""
     return _run(lambda: svc.save_customer_mappings(
         session, body.finance_type, body.customer_id, body.aliases, body.mismatches,
-        [r.model_dump() for r in body.resolutions],
+        [r.model_dump() for r in body.resolutions], [w.model_dump() for w in body.confirmed_similar],
     ))
 
 
 @router.post("/remember")
 def remember(body: RememberRequest, session: Session = Depends(get_session), _=Depends(get_current_user)):
-    """One-click 'Remember this': add the extracted text as an AI-mismatch name (status: added/exists/limit_reached/conflict)."""
+    """One-click 'Remember this': add the extracted text as an AI-mismatch name (status: added/exists/limit_reached/conflict/similar)."""
     return _run(lambda: svc.remember(session, body.finance_type, body.customer_id, body.word))
 
 

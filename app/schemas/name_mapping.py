@@ -28,6 +28,7 @@ class SaveRequest(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     mismatches: list[str] = Field(default_factory=list)
     resolutions: list[Resolution] = Field(default_factory=list)
+    confirmed_similar: list[WordItem] = Field(default_factory=list)    # new words the user chose to "Add anyway"
 
 
 class RememberRequest(BaseModel):

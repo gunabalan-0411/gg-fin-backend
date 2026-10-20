@@ -18,11 +18,16 @@ from sqlmodel import Session
 
 from app.services import mapping_matcher as mm
 from app.services.mapping_matcher import MappingRow
+from rapidfuzz import fuzz
+
+from app.utils.name_matching import _normalize
 
 # Above this many mapping rows the matcher stops loading everything into memory and asks Postgres for a
 # pre-filtered candidate set per name instead (requirement R-31).
 MEMORY_LIMIT = int(os.environ.get("NAME_MAPPING_MEMORY_LIMIT", "5000"))
 MAX_WORD_LEN = 200
+SIMILAR_NAME_MIN = 90.0         # a new word this similar (0-100) to a customer name is reported ...
+MAX_SIMILAR_SHOWN = 3           # ... listing at most this many customers per word
 
 CUSTOMER_TABLE = {"EDI": "tbl_edi_customer", "IOP": "tbl_iop_customer"}
 # kind -> (table, live view, word column)
@@ -263,13 +268,77 @@ def check(session: Session, ftype: str, customer_id: int, items: Sequence[dict])
     return find_conflicts(session, ftype, c["name"], items)
 
 
+# ── Similar customer names ────────────────────────────────────────────────────────────────────────────────
+def name_similarity(a: str, b: str) -> float:
+    """
+    0-100 similarity of two WHOLE names (case and spacing ignored; word order ignored). Deliberately not the OCR scorer:
+    that one gives 100 to any substring, which would flag a one-letter word against every name containing it.
+    """
+    x, y = _normalize(a), _normalize(b)
+    if not x or not y:
+        return 0.0
+    if x == y:
+        return 100.0
+    return round(max(fuzz.ratio(x, y), fuzz.token_sort_ratio(x, y)), 1)
+
+
+def find_similar_names(session: Session, ftype: str, own: dict, items: Sequence[dict]) -> list[dict]:
+    """
+    New words that look like the NAME of an existing customer (same product, account not closed): whole-name similarity of
+    `SIMILAR_NAME_MIN` (90%) and up. Other customers' aliases / mismatch words are NOT compared here (those keep the
+    exact-match conflict check). `own` is the customer being edited; a match with its own name is flagged `own` so the UI
+    can word it differently.
+    """
+    res = session.execute(
+        text(f"SELECT customer_id, customer_name FROM {CUSTOMER_TABLE[ftype]} "
+             "WHERE NOT COALESCE(is_closed, false) AND customer_name IS NOT NULL AND btrim(customer_name) <> ''")
+    )
+    people = [(r[0], r[1]) for r in res]
+    own_name = _normalize(own["name"])
+    out: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for it in items:
+        kind, word = normalize_kind(it["kind"]), clean_word(it["word"])
+        if not word or (kind, word) in seen:
+            continue
+        seen.add((kind, word))
+        matches, names = [], set()
+        scored = sorted(((name_similarity(word, n), cid, n) for cid, n in people), key=lambda x: -x[0])   # best first
+        for score, cid, name in scored:
+            if score < SIMILAR_NAME_MIN:
+                break
+            key = _normalize(name)
+            if key in names:                                         # two accounts with the same name: one line
+                continue
+            names.add(key)
+            matches.append({"customer_id": cid, "customer_name": name, "score": score, "own": cid == own["id"] or key == own_name})
+            if len(matches) == MAX_SIMILAR_SHOWN:
+                break
+        if matches:
+            out.append({"kind": kind, "word": word, "matches": matches})
+    return out
+
+
+def needs_confirmation(entry: dict) -> bool:
+    """Only a look-alike of ANOTHER customer must be confirmed ("Add anyway"); being close to the customer's own name is
+    what a misspelling normally is, so that is only shown as a note."""
+    return any(not m["own"] for m in entry["matches"])
+
+
+def check_similar(session: Session, ftype: str, customer_id: int, items: Sequence[dict]) -> list[dict]:
+    ftype = normalize_type(ftype)
+    c = _open_customer_with_name(session, ftype, customer_id)
+    return find_similar_names(session, ftype, c, items)
+
+
 # ── Save (popup) ──────────────────────────────────────────────────────────────────────────────────────────
 def _repoint(session: Session, ftype: str, name: str) -> None:
     session.execute(text("SELECT fn_ggfin_repoint_mappings(:t, :n)"), {"t": ftype, "n": name})
 
 
 def save_customer_mappings(session: Session, ftype: str, customer_id: int, aliases: Sequence[str],
-                           mismatches: Sequence[str], resolutions: Sequence[dict] = ()) -> dict:
+                           mismatches: Sequence[str], resolutions: Sequence[dict] = (),
+                           confirmed_similar: Sequence[dict] = ()) -> dict:
     """
     Make the customer's alias / AI-mismatch lists exactly `aliases` / `mismatches` (the popup's Save).
     Editing a word = removing the old one and adding the new one, so an edited word starts with fresh usage stats.
@@ -299,8 +368,18 @@ def save_customer_mappings(session: Session, ftype: str, customer_id: int, alias
         action = decisions.get((cf["kind"], cf["word"]))
         if action not in RESOLUTIONS:
             unresolved.append(cf)
+
+    # a new word that looks like a customer's name needs an explicit "Add anyway" (only NEW words — saved ones are not re-checked)
+    confirmed = {(normalize_kind(r.get("kind")), clean_word(r.get("word"))) for r in confirmed_similar}
+    unconfirmed = [s for s in find_similar_names(session, ftype, c, wanted)
+                   if needs_confirmation(s) and (s["kind"], s["word"]) not in confirmed]
+
     if unresolved:
-        raise MappingError(409, "conflict", "Some names are already mapped to another customer", conflicts=unresolved)
+        raise MappingError(409, "conflict", "Some names are already mapped to another customer",
+                           conflicts=unresolved, similar=unconfirmed)
+    if unconfirmed:
+        raise MappingError(409, "similar", "Some names look like an existing customer — confirm to add them anyway",
+                           conflicts=[], similar=unconfirmed)
 
     try:
         for cf in conflicts:                                             # "move": delete the other customer's row
@@ -350,6 +429,9 @@ def remember(session: Session, ftype: str, customer_id: int, word: str) -> dict:
     conflicts = find_conflicts(session, ftype, c["name"], [{"kind": "ai_mismatch", "word": w}])
     if conflicts:
         return {"status": "conflict", "word": w, "conflicts": conflicts}
+    similar = [s for s in find_similar_names(session, ftype, c, [{"kind": "ai_mismatch", "word": w}]) if needs_confirmation(s)]
+    if similar:                                    # looks like ANOTHER customer's name: never saved silently, the popup asks
+        return {"status": "similar", "word": w, "similar": similar}
     try:
         session.execute(
             text("INSERT INTO tbl_customer_ai_mismatch (finance_type, customer_name, mismatch_name, active_customer_id) "
