@@ -9,6 +9,7 @@ from app.models.mapping import EdiNameMap, EdiGroupMap, IopNameMap, IopGroupMap
 from app.models.customer_mapping import CustomerAlias, CustomerAiMismatch
 from app.models.backup import BackupSettings
 from app.models.upi import UpiTransaction, GmailSettings, UpiVpaMapping, DriveSettings
+from app.models.note import NotePage
 
 __all__ = [
     "User",
@@ -23,4 +24,5 @@ __all__ = [
     "CustomerAlias", "CustomerAiMismatch",
     "BackupSettings",
     "UpiTransaction", "GmailSettings", "UpiVpaMapping", "DriveSettings",
+    "NotePage",
 ]
