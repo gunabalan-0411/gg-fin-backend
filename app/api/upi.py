@@ -7,7 +7,7 @@ from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.database import get_session
 from app.models.upi import UpiTransaction, UpiVpaMapping
-from app.schemas.upi_pairing import ApplyPairingsRequest, MoveVpaMappingsRequest
+from app.schemas.upi_pairing import ApplyPairingsRequest, MoveVpaMappingsRequest, UnlinkVpaRequest
 from app.services import upi_mapping_service, upi_service
 
 router = APIRouter()
@@ -362,6 +362,21 @@ def apply_pairings(
 ):
     """Save the UPI transactions the OCR page paired with customers (UPI id -> customer, for future auto-mapping)."""
     return upi_mapping_service.apply_pairings(session, body.pairings)
+
+
+@router.post("/vpa-mappings/unlink")
+def unlink_upi_id(
+    body: UnlinkVpaRequest,
+    session: Session = Depends(get_session),
+    _=Depends(get_current_user),
+):
+    """Unlink a mapped UPI transaction: delete its UPI id's saved customer mapping and clear that link on the id's payments."""
+    try:
+        return upi_mapping_service.unlink_upi_id(session, body.txn_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/vpa-mappings/move")

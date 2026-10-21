@@ -16,6 +16,10 @@ class ApplyPairingsRequest(BaseModel):
     pairings: list[Pairing] = Field(max_length=500)
 
 
+class UnlinkVpaRequest(BaseModel):
+    txn_id: int
+
+
 class MoveVpaMappingsRequest(BaseModel):
     customer_type: str                      # "edi" | "iop"
     from_customer_id: int

@@ -78,6 +78,49 @@ def apply_pairings(session: Session, pairings: list[Pairing]) -> dict:
     return result
 
 
+def unlink_upi_id(session: Session, txn_id: int) -> dict:
+    """
+    "Unlink" on a mapped UPI transaction: the UPI id stops pointing at the customer it is linked to.
+      * the saved UPI id -> customer mapping is deleted, so later payments from that id are not linked again;
+      * this transaction, and every other payment from the same UPI id still linked to that same customer, lose the link.
+    Payments linked to a DIFFERENT customer are left alone, and nothing already recorded on a sheet changes.
+    """
+    txn = session.get(UpiTransaction, txn_id)
+    if txn is None:
+        raise LookupError("Transaction not found")
+    cid, ctype = txn.mapped_customer_id, (txn.mapped_customer_type or "").strip().lower()
+    if cid is None:
+        raise ValueError("This transaction is not linked to a customer")
+
+    removed = 0
+    cleared = 0
+    vpa = (txn.sender_vpa or "").strip().lower()
+    if vpa:
+        for m in session.exec(
+            select(UpiVpaMapping)
+            .where(func.lower(UpiVpaMapping.upi_vpa) == vpa)
+            .where(UpiVpaMapping.customer_type == ctype)
+            .where(UpiVpaMapping.customer_id == cid)
+        ).all():
+            session.delete(m)
+            removed += 1
+        siblings = session.exec(
+            select(UpiTransaction)
+            .where(func.lower(UpiTransaction.sender_vpa) == vpa)
+            .where(UpiTransaction.mapped_customer_id == cid)
+            .where(UpiTransaction.mapped_customer_type == txn.mapped_customer_type)
+        ).all()
+    else:
+        siblings = [txn]
+    for t in siblings:
+        t.mapped_customer_id = None
+        t.mapped_customer_type = None
+        session.add(t)
+        cleared += 1
+    session.commit()
+    return {"removed_mappings": removed, "cleared": cleared, "upi_vpa": vpa or None}
+
+
 def move_vpa_mappings(session: Session, customer_type: str, from_id: int, to_id: int) -> int:
     """
     Move every saved UPI id of one account to another. Only between a CLOSED and an OPEN account of the same product
