@@ -411,6 +411,89 @@ def save_customer_mappings(session: Session, ftype: str, customer_id: int, alias
 
 
 # ── Remember this (one click, AI-mismatch only) ───────────────────────────────────────────────────────────
+def carry_preview(session: Session, ftype: str, customer_id: int) -> dict:
+    """The alias / AI-mismatch names stored under this customer's name — for ANY customer, open or closed (the popup only serves open ones)."""
+    ftype = normalize_type(ftype)
+    c = get_customer(session, ftype, customer_id)
+    name = c["name"] or ""
+    return {
+        "customer": {"id": c["id"], "name": c["name"], "is_closed": c["is_closed"], "finance_type": ftype},
+        "aliases": [r["word"] for r in _group_rows(session, "alias", ftype, name)] if name else [],
+        "mismatches": [r["word"] for r in _group_rows(session, "ai_mismatch", ftype, name)] if name else [],
+    }
+
+
+def carry_forward(session: Session, ftype: str, from_id: int, to_id: int, kinds: Sequence[str] = tuple(KIND_META)) -> dict:
+    """
+    Re-loan: a CLOSED account is replaced by a new OPEN one. The words are stored by customer NAME, so a new account with the SAME
+    name already gets them (the database points them at the open account) — nothing to copy. A new account with ANOTHER name gets a copy
+    of the closed account's words under its own name (the closed account keeps its own: closed customers are never used for matching).
+    Words the new name already has are left alone; the per-customer limits still apply. `kinds` chooses alias and / or AI-mismatch names.
+    Returns exactly what was added, for Undo.
+    """
+    ftype = normalize_type(ftype)
+    if from_id == to_id:
+        raise MappingError(400, "same_customer", "The two accounts are the same")
+    src, dst = get_customer(session, ftype, from_id), get_customer(session, ftype, to_id)
+    if not src["is_closed"] or dst["is_closed"]:
+        raise MappingError(409, "not_closed_to_open", "Names can only be carried from a closed account to an open one")
+    if not (dst["name"] or "").strip():
+        raise MappingError(422, "customer_has_no_name", "The new account has no name, so names cannot be mapped to it")
+
+    result: dict = {"same_name": src["name"] == dst["name"], "alias": [], "ai_mismatch": [], "skipped": {"alias": 0, "ai_mismatch": 0}}
+    if result["same_name"] or not (src["name"] or "").strip():
+        return result                                                    # same name: they follow by themselves
+
+    try:
+        for kind in kinds:
+            table, _view, col = KIND_META[normalize_kind(kind)]
+            have = {r["word"] for r in _group_rows(session, kind, ftype, dst["name"])}
+            room = max(mm.KIND_LIMIT[kind] - len(have), 0)
+            for r in _group_rows(session, kind, ftype, src["name"]):
+                if r["word"] in have:
+                    continue
+                if room <= 0:
+                    result["skipped"][kind] += 1
+                    continue
+                session.execute(
+                    text(f"INSERT INTO {table} (finance_type, customer_name, {col}, active_customer_id) VALUES (:t, :n, :w, :cid)"),
+                    {"t": ftype, "n": dst["name"], "w": r["word"], "cid": dst["id"]},
+                )
+                result[kind].append(r["word"])
+                room -= 1
+        _repoint(session, ftype, dst["name"])
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    return result
+
+
+def undo_carry_forward(session: Session, ftype: str, customer_id: int, aliases: Sequence[str], mismatches: Sequence[str]) -> dict:
+    """Undo of carry_forward: remove exactly the words it added, from the new account's name. Nothing else is touched."""
+    ftype = normalize_type(ftype)
+    c = get_customer(session, ftype, customer_id)
+    removed = {"alias": 0, "ai_mismatch": 0}
+    if not (c["name"] or "").strip():
+        return {"removed": removed}
+    try:
+        for kind, words in (("alias", aliases), ("ai_mismatch", mismatches)):
+            table, _view, col = KIND_META[kind]
+            wanted = _clean_list(words)
+            if not wanted:
+                continue
+            res = session.execute(
+                text(f"DELETE FROM {table} WHERE finance_type = :t AND customer_name = :n AND {col} = ANY(:w)"),
+                {"t": ftype, "n": c["name"], "w": wanted},
+            )
+            removed[kind] = res.rowcount
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    return {"removed": removed}
+
+
 def remember(session: Session, ftype: str, customer_id: int, word: str) -> dict:
     """
     Add `word` as an AI-mismatch name of the customer. Never overwrites anything: when the customer is at the limit or the

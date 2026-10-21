@@ -9,7 +9,7 @@ from sqlmodel import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_session
-from app.schemas.name_mapping import CheckRequest, RememberRequest, SaveRequest, SuggestRequest
+from app.schemas.name_mapping import CarryForwardRequest, CheckRequest, RememberRequest, SaveRequest, SuggestRequest, UndoCarryRequest
 from app.services import name_mapping_service as svc
 from app.services.name_mapping_service import MappingError
 
@@ -51,6 +51,27 @@ def save_customer_mappings(body: SaveRequest, session: Session = Depends(get_ses
         session, body.finance_type, body.customer_id, body.aliases, body.mismatches,
         [r.model_dump() for r in body.resolutions], [w.model_dump() for w in body.confirmed_similar],
     ))
+
+
+@router.get("/carry-forward")
+def carry_preview(finance_type: str, customer_id: int, session: Session = Depends(get_session), _=Depends(get_current_user)):
+    """The names stored under a customer's name, open or closed (what a re-loan copy can carry forward)."""
+    return _run(lambda: svc.carry_preview(session, finance_type, customer_id))
+
+
+@router.post("/carry-forward")
+def carry_forward(body: CarryForwardRequest, session: Session = Depends(get_session), _=Depends(get_current_user)):
+    """Re-loan: carry a closed account's alias / AI-mismatch names to the open account that replaces it (copies when the name differs)."""
+    return _run(lambda: svc.carry_forward(
+        session, body.finance_type, body.from_customer_id, body.to_customer_id,
+        kinds=tuple(k for k, on in (("alias", body.aliases), ("ai_mismatch", body.mismatches)) if on),
+    ))
+
+
+@router.post("/carry-forward/undo")
+def undo_carry_forward(body: UndoCarryRequest, session: Session = Depends(get_session), _=Depends(get_current_user)):
+    """Undo of the above: remove exactly the words it added."""
+    return _run(lambda: svc.undo_carry_forward(session, body.finance_type, body.customer_id, body.aliases, body.mismatches))
 
 
 @router.post("/remember")
