@@ -43,5 +43,6 @@ class IopTransactionUpdate(BaseModel):
 
 class IopTransactionRead(IopTransactionCreate):
     transaction_id: int
+    principal_amount: Decimal = Decimal("0")
     customer_name: Optional[str] = None
     customer_name_ta: Optional[str] = None

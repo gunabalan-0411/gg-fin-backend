@@ -33,6 +33,7 @@ DATA_TABLES = [
     "tbl_edi_transactions", "tbl_iop_transactions",
     "tbl_upi_transactions", "tbl_upi_vpa_mappings", "tbl_drive_settings",
     "tbl_note_page",
+    "tbl_expense", "tbl_expense_category", "tbl_expense_person", "tbl_personal_expense",
 ]
 
 

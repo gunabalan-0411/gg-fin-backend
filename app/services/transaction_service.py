@@ -3,6 +3,7 @@ from decimal import Decimal
 from sqlmodel import Session, select, func
 
 from app.repositories.transaction_repo import EdiTransactionRepo, IopTransactionRepo
+from app.services import iop_split_service
 from app.schemas.transaction import (
     EdiTransactionCreate, EdiTransactionUpdate,
     IopTransactionCreate, IopTransactionUpdate,
@@ -84,6 +85,7 @@ class EdiTransactionService:
 
 class IopTransactionService:
     def __init__(self, session: Session):
+        self.session = session
         self.repo = IopTransactionRepo(session)
 
     def list_by_date(self, collection_date: date):
@@ -102,24 +104,38 @@ class IopTransactionService:
         txn = self.repo.get_by_id(transaction_id)
         if not txn:
             return None
-        return self.repo.update(txn, payload.model_dump(exclude_none=True))
+        data = payload.model_dump(exclude_none=True)
+        if data.get("payment_status") == "UNPAID" and (txn.principal_amount or 0) > 0:
+            # an unpaid collection brought no principal: take back what it had added (the interest stays as the user set it)
+            iop_split_service.apply_delta(self.session, txn.customer_id, -Decimal(str(txn.principal_amount)))
+            data["principal_amount"] = Decimal(0)
+        return self.repo.update(txn, data)
 
     def delete(self, transaction_id: int) -> bool:
         txn = self.repo.get_by_id(transaction_id)
         if not txn:
             return False
+        if (txn.principal_amount or 0) > 0:
+            iop_split_service.apply_delta(self.session, txn.customer_id, -Decimal(str(txn.principal_amount)))   # its principal goes with it
         self.repo.delete(txn)
         return True
 
-    def upsert(self, customer_id: int, collection_date: date, amount: float, payment_mode: str = "CASH", is_paid: bool = True):
+    def upsert(self, customer_id: int, collection_date: date, amount: float, payment_mode: str = "CASH", is_paid: bool = True,
+               principal: Decimal | float | int = 0):
+        """`amount` is the INTEREST of the collection; `principal` (if any) is added to the customer's principal_paid - only the
+        difference from what this transaction already added (a re-submit of the same sheet adds nothing twice)."""
         status = "PAID" if is_paid else "UNPAID"
+        new_principal = Decimal(str(principal or 0)) if is_paid else Decimal(0)
         existing = self.repo.get_by_customer_date_and_mode(customer_id, collection_date, payment_mode)
+        old_principal = Decimal(str(existing.principal_amount or 0)) if existing else Decimal(0)
+        iop_split_service.apply_delta(self.session, customer_id, new_principal - old_principal)
         if existing:
-            return self.repo.update(existing, {"amount": amount, "payment_status": status})
+            return self.repo.update(existing, {"amount": amount, "payment_status": status, "principal_amount": new_principal})
         return self.repo.create({
             "customer_id": customer_id,
             "collection_date": collection_date,
             "amount": amount,
             "payment_mode": payment_mode,
             "payment_status": status,
+            "principal_amount": new_principal,
         })

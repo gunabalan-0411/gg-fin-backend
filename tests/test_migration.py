@@ -91,11 +91,53 @@ def test_upgrade_downgrade_upgrade_cycle(fresh_db):
     assert r.returncode == 0, r.stdout + r.stderr
     assert _objects(cur) == (2, 2, 5, 6)
     r = _alembic("current")
-    assert "015_note_pages" in (r.stdout + r.stderr)
+    assert "018_personal_expenses" in (r.stdout + r.stderr)
     # 015: the Note Pad table exists after the upgrade, is gone after a downgrade to 014, and comes back
     cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = 'tbl_note_page'")
     assert cur.fetchone()[0] == 1
     cur.execute("INSERT INTO tbl_note_page (title, content) VALUES ('Mig', '# hi')")
+    # 018: Personal Finance - tbl_personal_expense; a downgrade removes only that table
+    cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = 'tbl_personal_expense'")
+    assert cur.fetchone()[0] == 1
+    cur.execute("INSERT INTO tbl_personal_expense (user_id, amount, date) VALUES (1, 10, '2026-01-01')")
+    r = _alembic("downgrade", "017_iop_principal_amount")
+    assert r.returncode == 0, r.stdout + r.stderr
+    cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = 'tbl_personal_expense'")
+    assert cur.fetchone()[0] == 0
+    cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = 'tbl_expense'")
+    assert cur.fetchone()[0] == 1                                          # office expenses are untouched
+    r = _alembic("upgrade", "head")
+    assert r.returncode == 0, r.stdout + r.stderr
+    # 017: IOP split collections - tbl_iop_transactions.principal_amount (existing rows get 0); a downgrade removes only that column
+    cur.execute("SELECT column_default FROM information_schema.columns WHERE table_name = 'tbl_iop_transactions' AND column_name = 'principal_amount'")
+    assert cur.fetchone() is not None
+    cur.execute("INSERT INTO tbl_iop_transactions (customer_id, collection_date, amount) VALUES (1, '2026-01-01', 10)")
+    cur.execute("SELECT principal_amount FROM tbl_iop_transactions WHERE customer_id = 1")
+    assert float(cur.fetchone()[0]) == 0.0
+    r = _alembic("downgrade", "016_expense_categories")
+    assert r.returncode == 0, r.stdout + r.stderr
+    cur.execute("SELECT count(*) FROM information_schema.columns WHERE table_name = 'tbl_iop_transactions' AND column_name = 'principal_amount'")
+    assert cur.fetchone()[0] == 0
+    cur.execute("SELECT count(*) FROM tbl_iop_transactions WHERE customer_id = 1")
+    assert cur.fetchone()[0] == 1                                          # the transaction itself survives
+    r = _alembic("upgrade", "head")
+    assert r.returncode == 0, r.stdout + r.stderr
+    # 016: expense categories / for whom - new tables and two columns on tbl_expense; old rows stay ungrouped; a downgrade removes only those
+    cur.execute("INSERT INTO tbl_expense (amount, date, notes) VALUES (10, '2026-01-01', 'old')")
+    cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name IN ('tbl_expense_category', 'tbl_expense_person')")
+    assert cur.fetchone()[0] == 2
+    cur.execute("SELECT category_id, person_id FROM tbl_expense WHERE notes = 'old'")
+    assert cur.fetchone() == (None, None)
+    r = _alembic("downgrade", "015_note_pages")
+    assert r.returncode == 0, r.stdout + r.stderr
+    cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name IN ('tbl_expense_category', 'tbl_expense_person')")
+    assert cur.fetchone()[0] == 0
+    cur.execute("SELECT count(*) FROM information_schema.columns WHERE table_name = 'tbl_expense' AND column_name IN ('category_id', 'person_id')")
+    assert cur.fetchone()[0] == 0
+    cur.execute("SELECT count(*) FROM tbl_expense WHERE notes = 'old'")
+    assert cur.fetchone()[0] == 1                                          # the expense itself survives
+    r = _alembic("upgrade", "head")
+    assert r.returncode == 0, r.stdout + r.stderr
     r = _alembic("downgrade", "014_customer_name_mappings")
     assert r.returncode == 0, r.stdout + r.stderr
     cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = 'tbl_note_page'")

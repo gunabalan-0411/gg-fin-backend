@@ -1,7 +1,7 @@
 from app.models.user import User
 from app.models.customer import EdiCustomer, IopCustomer
 from app.models.transaction import EdiTransaction, IopTransaction
-from app.models.expense import Expense
+from app.models.expense import Expense, ExpenseCategory, ExpensePerson, PersonalExpense
 from app.models.debt import Debt, DebtRepayment
 from app.models.unclaimed_balance import UnclaimedBalance
 from app.models.defaulted_balance import DefaultedBalance
@@ -15,7 +15,7 @@ __all__ = [
     "User",
     "EdiCustomer", "IopCustomer",
     "EdiTransaction", "IopTransaction",
-    "Expense",
+    "Expense", "ExpenseCategory", "ExpensePerson", "PersonalExpense",
     "Debt", "DebtRepayment",
     "UnclaimedBalance",
     "DefaultedBalance",

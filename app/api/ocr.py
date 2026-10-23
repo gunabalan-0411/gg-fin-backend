@@ -12,7 +12,7 @@ from app.core.database import get_session
 from app.models.customer import EdiCustomer, IopCustomer
 from app.models.mapping import EdiNameMap, IopNameMap
 from app.schemas.name_mapping import MappingRef
-from app.services import name_mapping_service, ocr_service
+from app.services import iop_split_service, name_mapping_service, ocr_service
 from app.services.mapping_matcher import HIGH_CONFIDENCE
 from app.services.transaction_service import EdiTransactionService, IopTransactionService
 
@@ -194,12 +194,35 @@ class OcrRecord(BaseModel):
     product_type: str
     payment_mode: str
     is_paid: bool = True
-    amount: int
+    amount: int                                # what was collected (for IOP this includes any principal)
+    principal_amount: float = 0                # IOP only: the part of `amount` that is principal; the rest is interest
     mapping_ref: Optional[MappingRef] = None   # set when the customer was picked through an alias / AI-mismatch entry
 
 
 class SubmitRequest(BaseModel):
     records: list[OcrRecord]
+
+
+def _split_rows(plan: list[dict]) -> list[dict]:
+    return [{"index": p["index"], "message": p["error"]} for p in plan if p["error"]]
+
+
+@router.post("/iop-split-check")
+def iop_split_check(
+    body: SubmitRequest,
+    session: Session = Depends(get_session),
+    _=Depends(get_current_user),
+):
+    """
+    Live check of the IOP rows that are split into principal + interest: for each one the interest, the customer's balance before and
+    after, and why it would be refused (principal above the amount or above the remaining balance). Nothing is saved.
+    """
+    plan = iop_split_service.plan(session, body.records)
+    return {"rows": [
+        {"index": p["index"], "principal": float(p["principal"]), "interest": float(p["interest"]),
+         "balance_before": None if p["balance_before"] is None else float(p["balance_before"]),
+         "balance_after": None if p["balance_after"] is None else float(p["balance_after"]), "error": p["error"]}
+        for p in plan]}
 
 
 @router.post("/submit")
@@ -210,7 +233,14 @@ def submit_records(
 ):
     saved = 0
     usage_refs: list[dict] = []
-    for rec in body.records:
+    # IOP rows split into principal + interest are checked first: if one is refused NOTHING is saved
+    plan = iop_split_service.plan(session, body.records)
+    problems = _split_rows(plan)
+    if problems:
+        raise HTTPException(status_code=422, detail={"code": "bad_principal", "message": problems[0]["message"], "rows": problems})
+    split_of = {p["index"]: p for p in plan}
+    principal_added = 0.0
+    for idx, rec in enumerate(body.records):
         if not rec.customer_id or not rec.amount:
             continue
         try:
@@ -219,7 +249,13 @@ def submit_records(
             continue
         is_iop = rec.product_type.upper() == "IOP"
         svc = IopTransactionService(session) if is_iop else EdiTransactionService(session)
-        svc.upsert(rec.customer_id, col_date, rec.amount, rec.payment_mode, rec.is_paid)
+        if is_iop:
+            split = split_of.get(idx)
+            principal = split["principal"] if split else 0
+            svc.upsert(rec.customer_id, col_date, rec.amount - principal, rec.payment_mode, rec.is_paid, principal)   # the transaction is the interest
+            principal_added += float(split["delta"]) if split else 0.0
+        else:
+            svc.upsert(rec.customer_id, col_date, rec.amount, rec.payment_mode, rec.is_paid)
         saved += 1
         if rec.mapping_ref:                       # only rows that were really saved count as a "use" (R-30)
             usage_refs.append({"kind": rec.mapping_ref.kind, "mapping_id": rec.mapping_ref.id,
@@ -232,4 +268,7 @@ def submit_records(
         except Exception:                         # the collections are already saved — never fail the submit over a counter
             session.rollback()
             log.exception("Could not record alias / AI-mismatch usage")
-    return {"submitted": saved, "mapping_usage": usage_counted}
+    result = {"submitted": saved, "mapping_usage": usage_counted}
+    if principal_added:                           # only when a split moved principal_paid: the answer is unchanged for every other submit
+        result["principal_added"] = principal_added
+    return result
