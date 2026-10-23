@@ -26,7 +26,9 @@ def _inr(n: Decimal | float | int) -> str:
     return f"₹{Decimal(str(n)):,.0f}"
 
 
-def parse_date(text: str) -> Optional[date]:
+def parse_date(text: Any) -> Optional[date]:
+    if isinstance(text, date):                                  # already a date (the Voice page)
+        return text
     try:
         return datetime.strptime(text, "%d-%m-%Y").date()
     except (TypeError, ValueError):
