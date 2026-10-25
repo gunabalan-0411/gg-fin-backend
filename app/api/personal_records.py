@@ -146,6 +146,27 @@ class GiftPatch(BaseModel):
     notes: Optional[str] = None
 
 
+# ── what the person holds (for the Personal dashboard) ───────────────────────────────────────────────────────
+def holdings(session: Session, user_id: int, today: date) -> dict:
+    """
+    Total in savings (the last recorded balances added up) and what is still to be collected from friends (open lends only; a repaid
+    lend is not counted), with how many are overdue and the nearest follow-up. The person's own rows only.
+    """
+    savings = session.exec(select(PersonalSaving).where(PersonalSaving.user_id == user_id)).all()
+    open_lends = [r for r in session.exec(select(PersonalLend).where(PersonalLend.user_id == user_id)).all() if not r.is_settled]
+    dated = sorted((r for r in open_lends if r.follow_up_date), key=lambda r: (r.follow_up_date, r.id))
+    upcoming = next((r for r in dated if r.follow_up_date >= today), None)
+    return {
+        "savings": {"total": sum((r.amount for r in savings), Decimal(0)), "accounts": len(savings)},
+        "lends": {
+            "to_collect": sum((r.amount for r in open_lends), Decimal(0)), "people": len(open_lends),
+            "overdue": sum(1 for r in dated if r.follow_up_date < today),
+            "overdue_amount": sum((r.amount for r in dated if r.follow_up_date < today), Decimal(0)),
+            "next_follow_up": upcoming.follow_up_date if upcoming else None, "next_follow_up_to": upcoming.to_whom if upcoming else None,
+        },
+    }
+
+
 # ── shared helpers ────────────────────────────────────────────────────────────────────────────────────────
 def _own(session: Session, model, rid: int, user: User):
     row = session.get(model, rid)

@@ -11,6 +11,7 @@ from sqlmodel import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_session
+from app.api.personal_records import holdings
 from app.models.user import User
 from app.schemas.expense import ExpenseRead, ExpenseUpdate, PersonalExpenseCreate
 from app.services import expense_group_service as svc
@@ -75,8 +76,12 @@ def personal_dashboard(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """The Personal view of the main dashboard: this month vs last month, this month by category, the last 12 months."""
-    return _run(lambda: svc.personal_dashboard(session, svc.personal(user.id), date.today()))
+    """The Personal view of the main dashboard: this month vs last month, this month by category, the last 12 months, and what the
+    person holds (total in savings, what is still to be collected from friends)."""
+    today = date.today()
+    out = _run(lambda: svc.personal_dashboard(session, svc.personal(user.id), today))
+    out["holdings"] = holdings(session, user.id, today)
+    return out
 
 
 @router.post("/expenses", response_model=ExpenseRead, status_code=201)
