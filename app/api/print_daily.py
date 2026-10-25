@@ -382,7 +382,7 @@ def edi_daily_print(
 
 <div class="header-top">
   <div class="header-left">
-    <div class="brand-name">GG Finance</div>
+    <div class="brand-name">TickBook</div>
     <div class="edi-badge">EDI</div>
   </div>
   <div class="header-right">
@@ -396,7 +396,7 @@ def edi_daily_print(
 {_grand_total_html(total_loan, total_balance, col_defs)}
 
 {_footer_html(
-    f"GG Finance · EDI தினசரி அறிக்கை · {today_str}",
+    f"TickBook · EDI தினசரி அறிக்கை · {today_str}",
     f"{len(rows)} வாடிக்கையாளர்கள்",
 )}
 
@@ -740,7 +740,7 @@ def iop_daily_print(
 
 <div class="header-top">
   <div class="header-left">
-    <div class="brand-name">GG Finance</div>
+    <div class="brand-name">TickBook</div>
     <div class="el-badge">EL</div>
   </div>
   <div class="header-right">
@@ -754,7 +754,7 @@ def iop_daily_print(
 {grand_total}
 
 <div class="report-footer">
-  <div class="footer-left">GG Finance · EL · {today_str}</div>
+  <div class="footer-left">TickBook · EL · {today_str}</div>
   <div class="footer-right">{len(el_rows)} வாடிக்கையாளர்கள்</div>
 </div>
 

@@ -5,11 +5,11 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, backup, customers, dashboard, debts, defaulted_balances, drive, export, expense_groups, expenses, personal, investors, name_mappings, namemap, notes, setup, sql, training_data, transactions, unclaimed_balances, voice, upi
+from app.api import auth, backup, customers, dashboard, debts, defaulted_balances, drive, export, expense_groups, expenses, personal, personal_records, investors, name_mappings, namemap, notes, setup, sql, training_data, transactions, unclaimed_balances, voice, upi
 from app.core.database import init_db
 from app.core.config import settings
 
-app = FastAPI(title="GG Finance API", version="1.0.0")
+app = FastAPI(title="TickBook API", version="1.0.0")
 
 _ALLOWED_ORIGINS = list(filter(None, [
     settings.FRONTEND_URL,
@@ -74,6 +74,7 @@ app.include_router(transactions.router, prefix="/api/transactions", tags=["trans
 app.include_router(expenses.router, prefix="/api/expenses", tags=["expenses"])
 app.include_router(expense_groups.router, prefix="/api/expense-groups", tags=["expense-groups"])
 app.include_router(personal.router, prefix="/api/personal", tags=["personal"])
+app.include_router(personal_records.router, prefix="/api/personal", tags=["personal"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(voice.router, prefix="/api/voice", tags=["voice"])
 try:

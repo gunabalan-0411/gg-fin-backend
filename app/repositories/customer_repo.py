@@ -17,6 +17,38 @@ _IOP_SORT_COLS = frozenset({
 })
 
 
+def shift_dependents_after_delete(session: Session, product: str, cid: int) -> None:
+    """
+    Delete-and-resequence moved every customer id above `cid` down by one. Everything else that stores a customer id follows, so no row
+    ends up pointing at a DIFFERENT customer:
+
+      transactions         the deleted customer's rows are parked on -id (they stay in the profit history but belong to nobody,
+                           and cannot merge into the customer that takes over the id); the rest shift down
+      UPI id -> customer   the deleted customer's saved UPI ids are removed; the rest shift down
+      UPI payments         a payment mapped to the deleted customer becomes unmapped; the rest shift down
+      unclaimed / defaulted  the deleted customer's rows keep their amount and name but lose the id; the rest shift down
+      alias / AI-misread   follow by NAME through the database triggers (app/db/mapping_schema.py)
+    `product` is "edi" or "iop"; the customer table and the name map are renumbered by the caller.
+    """
+    txn = f"tbl_{product}_transactions"
+    p = {"cid": cid, "p": product}
+    for sql in (
+        f"UPDATE {txn} SET customer_id = -customer_id WHERE customer_id = :cid",
+        f"UPDATE {txn} SET customer_id = customer_id - 1 WHERE customer_id > :cid",
+        "DELETE FROM tbl_upi_vpa_mappings WHERE customer_type = :p AND customer_id = :cid",
+        "UPDATE tbl_upi_vpa_mappings SET customer_id = customer_id - 1 WHERE customer_type = :p AND customer_id > :cid",
+        "UPDATE tbl_upi_transactions SET mapped_customer_id = NULL, mapped_customer_type = NULL "
+        "WHERE mapped_customer_type = :p AND mapped_customer_id = :cid",
+        "UPDATE tbl_upi_transactions SET mapped_customer_id = mapped_customer_id - 1 "
+        "WHERE mapped_customer_type = :p AND mapped_customer_id > :cid",
+        "UPDATE tbl_unclaimed_balance SET customer_id = NULL WHERE product = :p AND customer_id = :cid",
+        "UPDATE tbl_unclaimed_balance SET customer_id = customer_id - 1 WHERE product = :p AND customer_id > :cid",
+        "UPDATE tbl_defaulted_balance SET customer_id = NULL WHERE product = :p AND customer_id = :cid",
+        "UPDATE tbl_defaulted_balance SET customer_id = customer_id - 1 WHERE product = :p AND customer_id > :cid",
+    ):
+        session.execute(text(sql), p)
+
+
 class EdiCustomerRepo:
     def __init__(self, session: Session):
         self.session = session
@@ -119,10 +151,7 @@ class EdiCustomerRepo:
             text("UPDATE tbl_edi_customer SET customer_id = (-customer_id) - 1 WHERE customer_id < -:cid"),
             {"cid": customer_id},
         )
-        self.session.execute(
-            text("UPDATE tbl_edi_transactions SET customer_id = customer_id - 1 WHERE customer_id > :cid"),
-            {"cid": customer_id},
-        )
+        shift_dependents_after_delete(self.session, "edi", customer_id)
         self.session.execute(
             text("UPDATE tbl_edi_name_map SET customer_id = -customer_id WHERE customer_id > :cid"),
             {"cid": customer_id},
@@ -243,10 +272,7 @@ class IopCustomerRepo:
             text("UPDATE tbl_iop_customer SET customer_id = (-customer_id) - 1 WHERE customer_id < -:cid"),
             {"cid": customer_id},
         )
-        self.session.execute(
-            text("UPDATE tbl_iop_transactions SET customer_id = customer_id - 1 WHERE customer_id > :cid"),
-            {"cid": customer_id},
-        )
+        shift_dependents_after_delete(self.session, "iop", customer_id)
         self.session.execute(
             text("UPDATE tbl_iop_name_map SET customer_id = -customer_id WHERE customer_id > :cid"),
             {"cid": customer_id},

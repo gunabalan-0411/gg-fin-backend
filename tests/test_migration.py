@@ -91,11 +91,25 @@ def test_upgrade_downgrade_upgrade_cycle(fresh_db):
     assert r.returncode == 0, r.stdout + r.stderr
     assert _objects(cur) == (2, 2, 5, 6)
     r = _alembic("current")
-    assert "018_personal_expenses" in (r.stdout + r.stderr)
+    assert "019_personal_records" in (r.stdout + r.stderr)
     # 015: the Note Pad table exists after the upgrade, is gone after a downgrade to 014, and comes back
     cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = 'tbl_note_page'")
     assert cur.fetchone()[0] == 1
     cur.execute("INSERT INTO tbl_note_page (title, content) VALUES ('Mig', '# hi')")
+    # 019: Personal Finance records - savings / friendly lends / gifts; a downgrade removes only those three tables
+    cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name IN ('tbl_personal_saving', 'tbl_personal_lend', 'tbl_personal_gift')")
+    assert cur.fetchone()[0] == 3
+    cur.execute("INSERT INTO tbl_personal_lend (user_id, to_whom, amount) VALUES (1, 'Friend', 500)")
+    cur.execute("SELECT is_settled FROM tbl_personal_lend")
+    assert cur.fetchone()[0] is False                                      # default: not settled
+    r = _alembic("downgrade", "018_personal_expenses")
+    assert r.returncode == 0, r.stdout + r.stderr
+    cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name IN ('tbl_personal_saving', 'tbl_personal_lend', 'tbl_personal_gift')")
+    assert cur.fetchone()[0] == 0
+    cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = 'tbl_personal_expense'")
+    assert cur.fetchone()[0] == 1                                          # the personal expenses are untouched
+    r = _alembic("upgrade", "head")
+    assert r.returncode == 0, r.stdout + r.stderr
     # 018: Personal Finance - tbl_personal_expense; a downgrade removes only that table
     cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = 'tbl_personal_expense'")
     assert cur.fetchone()[0] == 1

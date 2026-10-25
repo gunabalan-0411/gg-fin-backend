@@ -1,6 +1,6 @@
 """Customer transaction PDF export — WeasyPrint renderer.
 
-Design matches GG Finance TX Report reference exactly:
+Design matches the TX Report reference exactly:
   - Header: brand + TRANSACTIONS badge left | label + customer name right
   - Summary strip: 4 bordered cells, outstanding highlighted dark
   - Transaction table: year-band separators, running balance, payment badges
@@ -370,7 +370,7 @@ def export_customer_pdf(
 
     # ── Footer ────────────────────────────────────────────────────────────────
     start_str    = _fmt_date(loan_start)
-    footer_left  = f"GG Finance · {display_name} · {start_str} முதல்"
+    footer_left  = f"TickBook · {display_name} · {start_str} முதல்"
     footer_right = f"கடன் #{'IOP' if is_iop else 'TX'}-{loan_year}"
 
     # ── Assemble HTML ─────────────────────────────────────────────────────────
@@ -384,7 +384,7 @@ def export_customer_pdf(
 
 <div class="header-top">
   <div class="header-left">
-    <div class="brand-name">GG Finance</div>
+    <div class="brand-name">TickBook</div>
     <div class="tx-badge">{product_badge}</div>
   </div>
   <div class="header-right">
