@@ -91,7 +91,22 @@ def test_upgrade_downgrade_upgrade_cycle(fresh_db):
     assert r.returncode == 0, r.stdout + r.stderr
     assert _objects(cur) == (2, 2, 5, 6)
     r = _alembic("current")
-    assert "019_personal_records" in (r.stdout + r.stderr)
+    assert "020_personal_borrow_invest" in (r.stdout + r.stderr)
+    # 020: Personal Finance borrows / investments; a downgrade removes only those two tables (the lends, savings, gifts stay)
+    cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name IN ('tbl_personal_borrow', 'tbl_personal_investment')")
+    assert cur.fetchone()[0] == 2
+    cur.execute("INSERT INTO tbl_personal_borrow (user_id, from_whom, amount) VALUES (1, 'Friend', 500)")
+    cur.execute("SELECT is_settled FROM tbl_personal_borrow")
+    assert cur.fetchone()[0] is False                                      # default: not paid
+    cur.execute("INSERT INTO tbl_personal_investment (user_id, name, inv_type, amount) VALUES (1, 'Fund', 'mutual_fund', 100)")
+    r = _alembic("downgrade", "019_personal_records")
+    assert r.returncode == 0, r.stdout + r.stderr
+    cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name IN ('tbl_personal_borrow', 'tbl_personal_investment')")
+    assert cur.fetchone()[0] == 0
+    cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name IN ('tbl_personal_saving', 'tbl_personal_lend', 'tbl_personal_gift')")
+    assert cur.fetchone()[0] == 3
+    r = _alembic("upgrade", "head")
+    assert r.returncode == 0, r.stdout + r.stderr
     # 015: the Note Pad table exists after the upgrade, is gone after a downgrade to 014, and comes back
     cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = 'tbl_note_page'")
     assert cur.fetchone()[0] == 1

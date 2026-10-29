@@ -1,5 +1,5 @@
 """
-Personal Finance records that belong to ONE login (user_id) and are never shown to another: savings accounts, friendly lends, gifts received.
+Personal Finance records that belong to ONE login (user_id) and are never shown to another: savings accounts, friendly lends, friendly borrows (money the person owes), gifts received, investments.
 """
 import datetime
 from decimal import Decimal
@@ -44,4 +44,29 @@ class PersonalGift(SQLModel, table=True):
     occasion: Optional[str] = None
     gift_from: Optional[str] = None
     received_date: Optional[datetime.date] = Field(default=None, index=True)
+    notes: Optional[str] = None
+
+
+class PersonalBorrow(SQLModel, table=True):
+    __tablename__ = "tbl_personal_borrow"
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)
+    from_whom: str                                                    # who the person owes
+    amount: Decimal = Field(decimal_places=2, max_digits=14)
+    pay_back_date: Optional[datetime.date] = Field(default=None, index=True)    # when it is to be paid back
+    is_settled: bool = Field(default=False)
+    notes: Optional[str] = None
+
+
+class PersonalInvestment(SQLModel, table=True):
+    __tablename__ = "tbl_personal_investment"
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)
+    name: str
+    inv_type: str                                                     # stocks | mutual_fund | fixed_deposit | gold | chit | other
+    amount: Decimal = Field(decimal_places=2, max_digits=14)          # invested
+    current_value: Optional[Decimal] = Field(default=None, decimal_places=2, max_digits=14)   # worth now, when known
+    invested_date: Optional[datetime.date] = Field(default=None, index=True)
     notes: Optional[str] = None

@@ -1,5 +1,5 @@
 """
-Personal Finance: savings accounts, friendly lends and gifts received of the LOGGED-IN person. Every row belongs to one user: another login
+Personal Finance: savings accounts, friendly lends, friendly borrows (what the person owes), gifts received and investments of the LOGGED-IN person. Every row belongs to one user: another login
 sees none of them and cannot change or delete them (they get "not found"). Mounted under /api/personal (see app/main.py).
 """
 from datetime import date
@@ -12,7 +12,7 @@ from sqlmodel import Session, select
 
 from app.api.deps import get_current_user
 from app.core.database import get_session
-from app.models.personal_records import PersonalGift, PersonalLend, PersonalSaving
+from app.models.personal_records import PersonalBorrow, PersonalGift, PersonalInvestment, PersonalLend, PersonalSaving
 from app.models.user import User
 
 router = APIRouter()
@@ -87,6 +87,71 @@ class LendRead(Read, LendIn):
     id: int
 
 
+class BorrowIn(BaseModel):
+    from_whom: str
+    amount: Decimal
+    pay_back_date: Optional[date] = None
+    is_settled: bool = False
+    notes: Text = None
+
+    @field_validator("from_whom")
+    @classmethod
+    def _required(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("required")
+        return v
+
+    @field_validator("amount")
+    @classmethod
+    def _positive(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("the amount must be more than zero")
+        return v
+
+
+class BorrowRead(Read, BorrowIn):
+    id: int
+
+
+InvestmentType = Literal["stocks", "mutual_fund", "fixed_deposit", "gold", "chit", "other"]
+
+
+class InvestmentIn(BaseModel):
+    name: str
+    inv_type: InvestmentType
+    amount: Decimal                                 # invested
+    current_value: Optional[Decimal] = None         # worth now, when the person knows it
+    invested_date: Optional[date] = None
+    notes: Text = None
+
+    @field_validator("name")
+    @classmethod
+    def _required(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("required")
+        return v
+
+    @field_validator("amount")
+    @classmethod
+    def _positive(cls, v: Decimal) -> Decimal:
+        if v <= 0:
+            raise ValueError("the amount invested must be more than zero")
+        return v
+
+    @field_validator("current_value")
+    @classmethod
+    def _not_negative(cls, v: Optional[Decimal]) -> Optional[Decimal]:
+        if v is not None and v < 0:
+            raise ValueError("the current value cannot be negative")
+        return v
+
+
+class InvestmentRead(Read, InvestmentIn):
+    id: int
+
+
 class GiftIn(BaseModel):
     gift_type: Literal["money", "gold", "other"]
     amount: Optional[Decimal] = None            # money: how much
@@ -135,6 +200,23 @@ class LendPatch(BaseModel):
     notes: Optional[str] = None
 
 
+class BorrowPatch(BaseModel):
+    from_whom: Optional[str] = None
+    amount: Optional[Decimal] = None
+    pay_back_date: Optional[date] = None
+    is_settled: Optional[bool] = None
+    notes: Optional[str] = None
+
+
+class InvestmentPatch(BaseModel):
+    name: Optional[str] = None
+    inv_type: Optional[InvestmentType] = None
+    amount: Optional[Decimal] = None
+    current_value: Optional[Decimal] = None
+    invested_date: Optional[date] = None
+    notes: Optional[str] = None
+
+
 class GiftPatch(BaseModel):
     gift_type: Optional[Literal["money", "gold", "other"]] = None
     amount: Optional[Decimal] = None
@@ -149,13 +231,17 @@ class GiftPatch(BaseModel):
 # ── what the person holds (for the Personal dashboard) ───────────────────────────────────────────────────────
 def holdings(session: Session, user_id: int, today: date) -> dict:
     """
-    Total in savings (the last recorded balances added up) and what is still to be collected from friends (open lends only; a repaid
-    lend is not counted), with how many are overdue and the nearest follow-up. The person's own rows only.
+    Total in savings (the last recorded balances added up), what is still to be collected from friends (open lends only; a repaid
+    lend is not counted) and what the person still owes (open borrows only), each with how many are overdue and the nearest date.
+    The person's own rows only.
     """
     savings = session.exec(select(PersonalSaving).where(PersonalSaving.user_id == user_id)).all()
     open_lends = [r for r in session.exec(select(PersonalLend).where(PersonalLend.user_id == user_id)).all() if not r.is_settled]
     dated = sorted((r for r in open_lends if r.follow_up_date), key=lambda r: (r.follow_up_date, r.id))
     upcoming = next((r for r in dated if r.follow_up_date >= today), None)
+    open_borrows = [r for r in session.exec(select(PersonalBorrow).where(PersonalBorrow.user_id == user_id)).all() if not r.is_settled]
+    due = sorted((r for r in open_borrows if r.pay_back_date), key=lambda r: (r.pay_back_date, r.id))
+    next_due = next((r for r in due if r.pay_back_date >= today), None)
     return {
         "savings": {"total": sum((r.amount for r in savings), Decimal(0)), "accounts": len(savings)},
         "lends": {
@@ -163,6 +249,12 @@ def holdings(session: Session, user_id: int, today: date) -> dict:
             "overdue": sum(1 for r in dated if r.follow_up_date < today),
             "overdue_amount": sum((r.amount for r in dated if r.follow_up_date < today), Decimal(0)),
             "next_follow_up": upcoming.follow_up_date if upcoming else None, "next_follow_up_to": upcoming.to_whom if upcoming else None,
+        },
+        "borrows": {
+            "to_pay": sum((r.amount for r in open_borrows), Decimal(0)), "people": len(open_borrows),
+            "overdue": sum(1 for r in due if r.pay_back_date < today),
+            "overdue_amount": sum((r.amount for r in due if r.pay_back_date < today), Decimal(0)),
+            "next_pay_back": next_due.pay_back_date if next_due else None, "next_pay_back_to": next_due.from_whom if next_due else None,
         },
     }
 
@@ -257,6 +349,68 @@ def update_lend(rid: int, patch: LendPatch, session: Session = Depends(get_sessi
 @router.delete("/lends/{rid}", status_code=204)
 def delete_lend(rid: int, session: Session = Depends(get_session), user: User = Depends(get_current_user)):
     session.delete(_own(session, PersonalLend, rid, user))
+    session.commit()
+
+
+# ── friendly borrows (what the person owes) ───────────────────────────────────────────────────────────────
+BORROW_FIELDS = ["from_whom", "amount", "pay_back_date", "is_settled", "notes"]
+
+
+@router.get("/borrows", response_model=list[BorrowRead])
+def list_borrows(session: Session = Depends(get_session), user: User = Depends(get_current_user)):
+    """Money still to be paid back first (the earliest pay-back date first, no date last), then the paid ones."""
+    rows = session.exec(select(PersonalBorrow).where(PersonalBorrow.user_id == user.id)).all()
+    return sorted(rows, key=lambda r: (r.is_settled, r.pay_back_date is None, r.pay_back_date or date.max, r.id))
+
+
+@router.post("/borrows", response_model=BorrowRead, status_code=201)
+def create_borrow(payload: BorrowIn, session: Session = Depends(get_session), user: User = Depends(get_current_user)):
+    return _save(session, PersonalBorrow(user_id=user.id, **payload.model_dump()))
+
+
+@router.patch("/borrows/{rid}", response_model=BorrowRead)
+def update_borrow(rid: int, patch: BorrowPatch, session: Session = Depends(get_session), user: User = Depends(get_current_user)):
+    row = _own(session, PersonalBorrow, rid, user)
+    new = _validate(BorrowIn, _merged(row, patch, BORROW_FIELDS))
+    for k, v in new.model_dump().items():
+        setattr(row, k, v)
+    return _save(session, row)
+
+
+@router.delete("/borrows/{rid}", status_code=204)
+def delete_borrow(rid: int, session: Session = Depends(get_session), user: User = Depends(get_current_user)):
+    session.delete(_own(session, PersonalBorrow, rid, user))
+    session.commit()
+
+
+# ── investments ───────────────────────────────────────────────────────────────────────────────────────────
+INVESTMENT_FIELDS = ["name", "inv_type", "amount", "current_value", "invested_date", "notes"]
+
+
+@router.get("/investments", response_model=list[InvestmentRead])
+def list_investments(session: Session = Depends(get_session), user: User = Depends(get_current_user)):
+    """Newest first (no date last)."""
+    rows = session.exec(select(PersonalInvestment).where(PersonalInvestment.user_id == user.id)).all()
+    return sorted(rows, key=lambda r: (r.invested_date is None, -(r.invested_date.toordinal() if r.invested_date else 0), -r.id))
+
+
+@router.post("/investments", response_model=InvestmentRead, status_code=201)
+def create_investment(payload: InvestmentIn, session: Session = Depends(get_session), user: User = Depends(get_current_user)):
+    return _save(session, PersonalInvestment(user_id=user.id, **payload.model_dump()))
+
+
+@router.patch("/investments/{rid}", response_model=InvestmentRead)
+def update_investment(rid: int, patch: InvestmentPatch, session: Session = Depends(get_session), user: User = Depends(get_current_user)):
+    row = _own(session, PersonalInvestment, rid, user)
+    new = _validate(InvestmentIn, _merged(row, patch, INVESTMENT_FIELDS))
+    for k, v in new.model_dump().items():
+        setattr(row, k, v)
+    return _save(session, row)
+
+
+@router.delete("/investments/{rid}", status_code=204)
+def delete_investment(rid: int, session: Session = Depends(get_session), user: User = Depends(get_current_user)):
+    session.delete(_own(session, PersonalInvestment, rid, user))
     session.commit()
 
 
