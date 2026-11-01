@@ -5,6 +5,7 @@ Uses its own throw-away database so the real migration chain (001 … 014) is ex
 import os
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
@@ -91,7 +92,20 @@ def test_upgrade_downgrade_upgrade_cycle(fresh_db):
     assert r.returncode == 0, r.stdout + r.stderr
     assert _objects(cur) == (2, 2, 5, 6)
     r = _alembic("current")
-    assert "020_personal_borrow_invest" in (r.stdout + r.stderr)
+    assert "021_debt_balance_anchor" in (r.stdout + r.stderr)
+    # 021: the six seeded loans took the bank's balance of 24 Oct 2025 (matched on start date + loan amount)
+    cur.execute("SELECT count(*), min(balance_anchor_date), max(balance_anchor_date) FROM tbl_debt WHERE balance_anchor IS NOT NULL")
+    assert cur.fetchone() == (6, date(2025, 10, 24), date(2025, 10, 24))
+    cur.execute("SELECT balance_anchor FROM tbl_debt WHERE date = '2022-01-07' AND amount = 450000")
+    assert cur.fetchone()[0] == 202000
+    r = _alembic("downgrade", "020_personal_borrow_invest")
+    assert r.returncode == 0, r.stdout + r.stderr
+    cur.execute("SELECT count(*) FROM information_schema.columns WHERE table_name = 'tbl_debt' AND column_name LIKE 'balance_anchor%'")
+    assert cur.fetchone()[0] == 0
+    r = _alembic("upgrade", "head")
+    assert r.returncode == 0, r.stdout + r.stderr
+    cur.execute("SELECT count(*) FROM tbl_debt WHERE balance_anchor IS NOT NULL")
+    assert cur.fetchone()[0] == 6
     # 020: Personal Finance borrows / investments; a downgrade removes only those two tables (the lends, savings, gifts stay)
     cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name IN ('tbl_personal_borrow', 'tbl_personal_investment')")
     assert cur.fetchone()[0] == 2

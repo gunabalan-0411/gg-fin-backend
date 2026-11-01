@@ -19,6 +19,9 @@ class Debt(SQLModel, table=True):
     end_date: Optional[datetime.date] = None
     paid_by: Optional[str] = None
     notes: Optional[str] = None
+    # Principal outstanding as the lender reported it on balance_anchor_date; the balance is rolled forward from here
+    balance_anchor: Optional[Decimal] = Field(default=None, decimal_places=2, max_digits=12)
+    balance_anchor_date: Optional[datetime.date] = None
 
 
 class DebtRepayment(SQLModel, table=True):

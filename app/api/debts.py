@@ -53,15 +53,50 @@ def _emi_balance(debt: Debt, as_of: datetime.date) -> float:
     return round(pmt * (1 - (1 + r) ** (-n_remaining)) / r, 2)
 
 
+def _emis_since(anchor: datetime.date, ref: datetime.date) -> int:
+    """EMIs falling due on the 5th after `anchor`, up to and including `ref` (a 5th)."""
+    months = (ref.year - anchor.year) * 12 + (ref.month - anchor.month)
+    if anchor.day < 5:
+        months += 1
+    return max(0, months)
+
+
+def _anchored_balance(debt: Debt, repayments: list[DebtRepayment], as_of: datetime.date) -> float:
+    """The lender's reported balance rolled forward month by month at the loan's own EMI and rate."""
+    bal = float(debt.balance_anchor)
+    if debt.emi_amount is None:
+        # no EMI to roll with: just take off what was repaid after the lender's figure
+        after = sum(float(r.amount) for r in repayments if r.date > debt.balance_anchor_date)
+        return max(0.0, round(bal - after, 2))
+    r = float(debt.interest_rate_pa or 0) / 12 / 100
+    pmt = float(debt.emi_amount)
+    for _ in range(_emis_since(debt.balance_anchor_date, as_of)):
+        bal = bal * (1 + r) - pmt
+        if bal <= 0:
+            return 0.0
+    return round(bal, 2)
+
+
+def _check_anchor(debt: Debt) -> None:
+    """The lender's balance and the date it was taken on only make sense together."""
+    if (debt.balance_anchor is None) != (debt.balance_anchor_date is None):
+        raise HTTPException(status_code=422, detail="Enter both the lender's balance and the date it is as of")
+    if debt.balance_anchor is not None and float(debt.balance_anchor) < 0:
+        raise HTTPException(status_code=422, detail="The lender's balance cannot be negative")
+
+
 def _debt_to_dict(debt: Debt, session: Session) -> dict:
-    total_repaid = _total_repaid(session, debt.id)
+    repayments = _repayments_for(session, debt.id)
+    total_repaid = float(sum(r.amount for r in repayments))
 
     has_emi_data = (
         debt.emi_amount is not None
         and debt.interest_rate_pa is not None
         and debt.tenure_months is not None
     )
-    if has_emi_data:
+    if debt.balance_anchor is not None and debt.balance_anchor_date is not None:
+        balance = _anchored_balance(debt, repayments, _balance_ref_date())
+    elif has_emi_data:
         balance = _emi_balance(debt, _balance_ref_date())
     else:
         balance = float(debt.amount) - total_repaid
@@ -79,6 +114,8 @@ def _debt_to_dict(debt: Debt, session: Session) -> dict:
         "paid_by": debt.paid_by,
         "total_repaid": total_repaid,
         "balance": balance,
+        "balance_anchor": float(debt.balance_anchor) if debt.balance_anchor is not None else None,
+        "balance_anchor_date": str(debt.balance_anchor_date) if debt.balance_anchor_date else None,
         "notes": debt.notes,
     }
 
@@ -122,7 +159,10 @@ def create_debt(
         end_date=data.get("end_date"),
         paid_by=data.get("paid_by"),
         notes=data.get("notes"),
+        balance_anchor=data.get("balance_anchor"),
+        balance_anchor_date=data.get("balance_anchor_date"),
     )
+    _check_anchor(debt)
     session.add(debt)
     session.commit()
     session.refresh(debt)
@@ -140,9 +180,11 @@ def update_debt(
     if not debt:
         raise HTTPException(status_code=404, detail="Debt not found")
     for field in ("date", "lender_name", "borrower_name", "amount", "emi_amount",
-                  "interest_rate_pa", "tenure_months", "end_date", "paid_by", "notes"):
+                  "interest_rate_pa", "tenure_months", "end_date", "paid_by", "notes",
+                  "balance_anchor", "balance_anchor_date"):
         if field in data:
             setattr(debt, field, data[field])
+    _check_anchor(debt)
     session.add(debt)
     session.commit()
     session.refresh(debt)
