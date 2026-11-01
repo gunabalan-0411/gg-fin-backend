@@ -92,7 +92,19 @@ def test_upgrade_downgrade_upgrade_cycle(fresh_db):
     assert r.returncode == 0, r.stdout + r.stderr
     assert _objects(cur) == (2, 2, 5, 6)
     r = _alembic("current")
-    assert "021_debt_balance_anchor" in (r.stdout + r.stderr)
+    assert "022_personal_budget" in (r.stdout + r.stderr)
+    # 022: Personal Finance monthly budget; one row per user and category, a downgrade removes only that table
+    cur.execute("INSERT INTO tbl_personal_budget (user_id, category_id, amount) VALUES (1, 5, 3000)")
+    with pytest.raises(psycopg2.errors.UniqueViolation):
+        cur.execute("INSERT INTO tbl_personal_budget (user_id, category_id, amount) VALUES (1, 5, 4000)")
+    r = _alembic("downgrade", "021_debt_balance_anchor")
+    assert r.returncode == 0, r.stdout + r.stderr
+    cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = 'tbl_personal_budget'")
+    assert cur.fetchone()[0] == 0
+    cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = 'tbl_personal_borrow'")
+    assert cur.fetchone()[0] == 1                                          # the borrows are untouched
+    r = _alembic("upgrade", "head")
+    assert r.returncode == 0, r.stdout + r.stderr
     # 021: the six seeded loans took the bank's balance of 24 Oct 2025 (matched on start date + loan amount)
     cur.execute("SELECT count(*), min(balance_anchor_date), max(balance_anchor_date) FROM tbl_debt WHERE balance_anchor IS NOT NULL")
     assert cur.fetchone() == (6, date(2025, 10, 24), date(2025, 10, 24))

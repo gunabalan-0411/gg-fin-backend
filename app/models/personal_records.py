@@ -5,6 +5,7 @@ import datetime
 from decimal import Decimal
 from typing import Optional
 
+from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -70,3 +71,14 @@ class PersonalInvestment(SQLModel, table=True):
     current_value: Optional[Decimal] = Field(default=None, decimal_places=2, max_digits=14)   # worth now, when known
     invested_date: Optional[datetime.date] = Field(default=None, index=True)
     notes: Optional[str] = None
+
+
+class PersonalBudget(SQLModel, table=True):
+    """What one person plans to spend in a month on one TOP-LEVEL expense category (the same amount every month)."""
+    __tablename__ = "tbl_personal_budget"
+    __table_args__ = (UniqueConstraint("user_id", "category_id", name="uq_personal_budget_user_category"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)
+    category_id: int = Field(index=True)                              # a top-level tbl_expense_category id
+    amount: Decimal = Field(decimal_places=2, max_digits=14)

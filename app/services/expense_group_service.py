@@ -152,6 +152,7 @@ def delete_category(session: Session, cid: int) -> dict:
         ids = [cid, *subs]
         moved = sum(session.execute(text(f"UPDATE {t} SET category_id = :m WHERE category_id = ANY(:ids)"), {"m": misc, "ids": ids}).rowcount
                     for t in ("tbl_expense", "tbl_personal_expense"))
+        session.execute(text("DELETE FROM tbl_personal_budget WHERE category_id = ANY(:ids)"), {"ids": ids})   # its monthly budgets go with it
         session.execute(text("DELETE FROM tbl_expense_category WHERE id = ANY(:ids)"), {"ids": ids})
     else:
         moved = sum(session.execute(text(f"UPDATE {t} SET category_id = :p WHERE category_id = :i"), {"p": c["parent_id"], "i": cid}).rowcount

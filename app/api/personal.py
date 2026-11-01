@@ -11,6 +11,7 @@ from sqlmodel import Session
 
 from app.api.deps import get_current_user
 from app.core.database import get_session
+from app.api.personal_budget import budget_summary
 from app.api.personal_records import holdings
 from app.models.user import User
 from app.schemas.expense import ExpenseRead, ExpenseUpdate, PersonalExpenseCreate
@@ -81,6 +82,7 @@ def personal_dashboard(
     today = date.today()
     out = _run(lambda: svc.personal_dashboard(session, svc.personal(user.id), today))
     out["holdings"] = holdings(session, user.id, today)
+    out["budget"] = budget_summary(session, user.id, today)
     return out
 
 
