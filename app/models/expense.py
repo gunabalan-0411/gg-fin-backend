@@ -31,6 +31,7 @@ class PersonalExpense(SQLModel, table=True):
     notes: Optional[str] = None
     category_id: Optional[int] = Field(default=None, index=True)   # the most specific category (same ids as tbl_expense_category)
     person_id: Optional[int] = Field(default=None, index=True)     # "for whom": optional here
+    account_id: Optional[int] = Field(default=None, index=True)    # the expense account it was paid from (tbl_personal_account), if any
 
 
 class ExpenseCategory(SQLModel, table=True):

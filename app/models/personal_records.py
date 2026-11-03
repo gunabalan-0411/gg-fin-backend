@@ -5,7 +5,7 @@ import datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import Index, UniqueConstraint, text
 from sqlmodel import Field, SQLModel
 
 
@@ -82,3 +82,30 @@ class PersonalBudget(SQLModel, table=True):
     user_id: int = Field(index=True)
     category_id: int = Field(index=True)                              # a top-level tbl_expense_category id
     amount: Decimal = Field(decimal_places=2, max_digits=14)
+    # The first month this budget counted: unspent (or overspent) amounts roll forward from here, never from before it.
+    start_month: datetime.date = Field(default_factory=lambda: datetime.date.today().replace(day=1))
+
+
+class PersonalAccount(SQLModel, table=True):
+    """An account used ONLY for expenses (a bank account, a wallet ...). Its balance in TickBook should equal the bank's."""
+    __tablename__ = "tbl_personal_account"
+    __table_args__ = (Index("uq_personal_account_user_name", "user_id", text("lower(name)"), unique=True),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)
+    name: str
+    opening_balance: Decimal = Field(default=0, decimal_places=2, max_digits=14)   # what it held at the START of opening_date
+    opening_date: datetime.date                                                   # funds and expenses from this day on count
+
+
+class PersonalAccountEntry(SQLModel, table=True):
+    """Money put into an account ('fund') or a correction found when matching with the bank ('adjustment', may be negative)."""
+    __tablename__ = "tbl_personal_account_entry"
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)
+    account_id: int = Field(index=True)
+    date: datetime.date = Field(index=True)
+    amount: Decimal = Field(decimal_places=2, max_digits=14)                       # funds are > 0; adjustments are signed
+    kind: str = "fund"                                                            # fund | adjustment
+    notes: Optional[str] = None

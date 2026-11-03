@@ -2,7 +2,7 @@ from app.models.user import User
 from app.models.customer import EdiCustomer, IopCustomer
 from app.models.transaction import EdiTransaction, IopTransaction
 from app.models.expense import Expense, ExpenseCategory, ExpensePerson, PersonalExpense
-from app.models.personal_records import PersonalSaving, PersonalLend, PersonalGift, PersonalBorrow, PersonalInvestment, PersonalBudget
+from app.models.personal_records import PersonalSaving, PersonalLend, PersonalGift, PersonalBorrow, PersonalInvestment, PersonalBudget, PersonalAccount, PersonalAccountEntry
 from app.models.debt import Debt, DebtRepayment
 from app.models.unclaimed_balance import UnclaimedBalance
 from app.models.defaulted_balance import DefaultedBalance

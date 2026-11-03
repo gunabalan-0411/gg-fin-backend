@@ -102,7 +102,10 @@ def update_personal(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    result = _run(lambda: svc.update_expense(session, expense_id, payload.model_dump(exclude_none=True), svc.personal(user.id)))
+    data = payload.model_dump(exclude_none=True)
+    if "account_id" in payload.model_fields_set:                        # null is meaningful here: take it off its account
+        data["account_id"] = payload.account_id
+    result = _run(lambda: svc.update_expense(session, expense_id, data, svc.personal(user.id)))
     if not result:
         raise HTTPException(status_code=404, detail="Expense not found")
     return result

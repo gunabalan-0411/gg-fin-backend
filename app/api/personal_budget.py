@@ -1,7 +1,8 @@
 """
 Personal Finance > Monthly budget: what the logged-in person plans to spend each month on every TOP-LEVEL expense category (the same
 amount every month), set against what they actually spent. Spending is the person's own personal expenses (sub-categories count
-towards their parent). Every row belongs to one login and is never shown to another.
+towards their parent). What is left over (or overspent) in a month carries forward into the next month's available amount, starting
+from the month the budget was first set. Every row belongs to one login and is never shown to another.
 """
 import calendar
 from datetime import date
@@ -49,49 +50,79 @@ def _month(value: Optional[str], today: date) -> date:
         raise HTTPException(status_code=422, detail="month must look like 2026-11")
 
 
-def _budgets(session: Session, user_id: int) -> dict[int, Decimal]:
-    rows = session.execute(text("SELECT category_id, amount FROM tbl_personal_budget WHERE user_id = :u"), {"u": user_id}).all()
+def _budgets(session: Session, user_id: int) -> dict[int, tuple[Decimal, date]]:
+    rows = session.execute(text("SELECT category_id, amount, start_month FROM tbl_personal_budget WHERE user_id = :u"), {"u": user_id}).all()
+    return {r[0]: (r[1], r[2]) for r in rows}
+
+
+def _spent_before(session: Session, user_id: int, first: date) -> dict[int, Decimal]:
+    """Per budgeted main category: everything spent from the month its budget started up to (not including) `first`."""
+    rows = session.execute(text("""
+        SELECT b.category_id, COALESCE(sum(e.amount), 0)
+        FROM tbl_personal_budget b
+        JOIN tbl_expense_category c ON COALESCE(c.parent_id, c.id) = b.category_id
+        JOIN tbl_personal_expense e ON e.category_id = c.id AND e.user_id = b.user_id AND e."date" >= b.start_month AND e."date" < :first
+        WHERE b.user_id = :u
+        GROUP BY b.category_id
+    """), {"u": user_id, "first": first}).all()
     return {r[0]: r[1] for r in rows}
 
 
+def _months_between(a: date, b: date) -> int:
+    return (b.year - a.year) * 12 + (b.month - a.month)
+
+
 def budget_view(session: Session, user_id: int, first: date) -> dict:
-    """Every top-level category with its budget and what was spent in the month starting `first`."""
+    """Every top-level category with its budget, what rolled in from earlier months, and what was spent in the month starting `first`."""
     last = first.replace(day=calendar.monthrange(first.year, first.month)[1])
     spent = svc.summary(session, first, last, None, None, svc.personal(user_id))     # also seeds the default categories
     by_cat = {c["id"]: c for c in spent["categories"]}
     budgets = _budgets(session, user_id)
+    before = _spent_before(session, user_id, first)
     tops = session.execute(text("SELECT id, name FROM tbl_expense_category WHERE parent_id IS NULL ORDER BY lower(name)")).all()
 
     rows = []
     for cid, name in tops:
         c = by_cat.get(cid)
         total = c["total"] if c else Decimal(0)
-        budget = budgets.get(cid)
+        budget, start = budgets.get(cid, (None, None))
+        carry = Decimal(0)
+        if budget is not None:
+            n = max(_months_between(start, first), 0)                    # whole months since the budget began, up to the one before this
+            carry = budget * n - before.get(cid, Decimal(0)) if n else Decimal(0)
+        available = (budget + carry) if budget is not None else None
         rows.append({
             "category_id": cid, "name": name, "budget": budget, "spent": total,
-            "left": (budget - total) if budget is not None else None,
-            "over": budget is not None and total > budget,
+            "carried_in": carry if budget is not None else None,
+            "available": available,
+            "left": (available - total) if available is not None else None,       # this is what rolls into next month
+            "over": available is not None and total > available,
             "subs": [{"id": s["id"], "name": s["name"], "total": s["total"]} for s in (c["subs"] if c else [])],
         })
     ungrouped = by_cat.get(None)
-    total_budget = sum((r["budget"] for r in rows if r["budget"] is not None), Decimal(0))
-    spent_budgeted = sum((r["spent"] for r in rows if r["budget"] is not None), Decimal(0))
+    budgeted = [r for r in rows if r["budget"] is not None]
+    total_budget = sum((r["budget"] for r in budgeted), Decimal(0))
+    total_carry = sum((r["carried_in"] for r in budgeted), Decimal(0))
+    spent_budgeted = sum((r["spent"] for r in budgeted), Decimal(0))
     return {
         "month": f"{first.year:04d}-{first.month:02d}",
         "categories": rows,
         "ungrouped": {"name": "Ungrouped", "spent": ungrouped["total"]} if ungrouped else None,
         "total_budget": total_budget,
+        "total_carried_in": total_carry,
+        "total_available": total_budget + total_carry,
         "spent_on_budgeted": spent_budgeted,
+        "left": total_budget + total_carry - spent_budgeted,                     # carries into next month
         "total_spent": spent["total"],
         "over_count": sum(1 for r in rows if r["over"]),
-        "budgeted_count": sum(1 for r in rows if r["budget"] is not None),
+        "budgeted_count": len(budgeted),
     }
 
 
 def budget_summary(session: Session, user_id: int, today: date) -> dict:
     """The few numbers the Personal dashboard shows for this month."""
     v = budget_view(session, user_id, today.replace(day=1))
-    return {k: v[k] for k in ("total_budget", "spent_on_budgeted", "over_count", "budgeted_count")}
+    return {k: v[k] for k in ("total_budget", "total_available", "spent_on_budgeted", "over_count", "budgeted_count")}
 
 
 @router.get("/budgets")
@@ -126,8 +157,8 @@ def set_budget(
     ).rowcount
     if not updated:
         session.execute(
-            text("INSERT INTO tbl_personal_budget (user_id, category_id, amount) VALUES (:u, :c, :a)"),
-            {"u": user.id, "c": category_id, "a": amount},
+            text("INSERT INTO tbl_personal_budget (user_id, category_id, amount, start_month) VALUES (:u, :c, :a, :s)"),
+            {"u": user.id, "c": category_id, "a": amount, "s": date.today().replace(day=1)},
         )
     session.commit()
     return {"category_id": category_id, "amount": amount}

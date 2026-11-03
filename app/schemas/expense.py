@@ -22,6 +22,7 @@ class ExpenseUpdate(BaseModel):
     notes: Optional[str] = None
     category_id: Optional[int] = None
     person_id: Optional[int] = None
+    account_id: Optional[int] = None        # personal expenses only; send null to take it off its expense account
 
 
 class ExpenseRead(BaseModel):
@@ -35,6 +36,8 @@ class ExpenseRead(BaseModel):
     sub_name: Optional[str] = None          # the sub-category (None when only a top-level one was chosen)
     person_id: Optional[int] = None
     person_name: Optional[str] = None
+    account_id: Optional[int] = None        # personal expenses: the expense account it was paid from
+    account_name: Optional[str] = None
 
 
 class ExpenseBulkCreate(BaseModel):
@@ -70,3 +73,4 @@ class PersonalExpenseCreate(BaseModel):
     notes: Optional[str] = None
     category_id: Optional[int] = None       # Miscellaneous when left out
     person_id: Optional[int] = None         # "for whom" is optional for personal expenses
+    account_id: Optional[int] = None        # the expense account it was paid from (optional)

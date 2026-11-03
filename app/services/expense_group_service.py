@@ -224,10 +224,19 @@ _SELECT_TMPL = """
     LEFT JOIN tbl_expense_person pe   ON pe.id = e.person_id
 """
 _COLS = ["id", "amount", "date", "notes", "category_id", "top_id", "top_name", "sub_name", "person_id", "person_name"]
+_COLS_PERSONAL = _COLS + ["account_id", "account_name"]           # a personal expense also says which expense account paid it
+
+
+def _cols(scope: Scope) -> list[str]:
+    return _COLS if scope.user_id is None else _COLS_PERSONAL
 
 
 def _select(scope: Scope) -> str:
-    return _SELECT_TMPL.replace("{table}", scope.table)           # the table name is one of our two constants, never user input
+    sql = _SELECT_TMPL.replace("{table}", scope.table)             # the table name is one of our two constants, never user input
+    if scope.user_id is None:
+        return sql
+    return (sql.replace("e.person_id, pe.name AS person_name", "e.person_id, pe.name AS person_name, e.account_id, ac.name AS account_name")
+            + "    LEFT JOIN tbl_personal_account ac ON ac.id = e.account_id\n")
 
 
 def _where(date_from: Optional[date], date_to: Optional[date], category_id: Optional[int], person_id: Optional[int],
@@ -255,14 +264,15 @@ def list_expenses(session: Session, skip: int = 0, limit: int = 10000, date_from
                   search: Optional[str] = None, scope: Scope = OFFICE) -> list[dict]:
     where, params = _where(date_from, date_to, category_id, person_id, ungrouped, search, scope)
     rows = session.execute(text(_select(scope) + where + ' ORDER BY e."date" DESC, e.id DESC OFFSET :o LIMIT :l'), {**params, "o": skip, "l": limit}).all()
-    return [dict(zip(_COLS, r)) for r in rows]
+    cols = _cols(scope)
+    return [dict(zip(cols, r)) for r in rows]
 
 
 def get_expense(session: Session, expense_id: int, scope: Scope = OFFICE) -> Optional[dict]:
     where, params = _where(None, None, None, None, scope=scope)
     clause = (where + " AND " if where else " WHERE ") + "e.id = :i"
     r = session.execute(text(_select(scope) + clause), {**params, "i": expense_id}).first()
-    return dict(zip(_COLS, r)) if r else None
+    return dict(zip(_cols(scope), r)) if r else None
 
 
 # ── writing expenses ──────────────────────────────────────────────────────────────────────────────────────
@@ -275,20 +285,32 @@ def _resolve(session: Session, category_id: Optional[int], person_id: Optional[i
     return cat, _person(session, person_id)["id"]
 
 
+def _check_account(session: Session, scope: Scope, account_id: Optional[int]) -> Optional[int]:
+    """The expense account an expense was paid from: one of THIS person's own, or none."""
+    if account_id is None:
+        return None
+    if scope.user_id is None or session.execute(text("SELECT 1 FROM tbl_personal_account WHERE id = :i AND user_id = :u"),
+                                                {"i": account_id, "u": scope.user_id}).first() is None:
+        raise ExpenseGroupError(422, "account_not_found", "That expense account does not exist")
+    return account_id
+
+
 def create_expenses(session: Session, items: Sequence[Any], scope: Scope = OFFICE) -> list[dict]:
     """All or nothing: every line is checked first, then all are saved in one transaction."""
     prepared = []
     for it in items:
         cat, per = _resolve(session, it.category_id, it.person_id, need_person=scope.need_person)
-        prepared.append({"amount": it.amount, "date": it.date, "notes": (it.notes or "").strip() or None, "cat": cat, "per": per})
+        acct = _check_account(session, scope, getattr(it, "account_id", None))
+        prepared.append({"amount": it.amount, "date": it.date, "notes": (it.notes or "").strip() or None, "cat": cat, "per": per, "acct": acct})
     ids = []
     try:
         for p in prepared:
             if scope.user_id is None:
                 sql = 'INSERT INTO tbl_expense (amount, "date", notes, category_id, person_id) VALUES (:amount, :date, :notes, :cat, :per) RETURNING id'
+                p = {k: v for k, v in p.items() if k != "acct"}
             else:
-                sql = ('INSERT INTO tbl_personal_expense (user_id, amount, "date", notes, category_id, person_id) '
-                       'VALUES (:uid, :amount, :date, :notes, :cat, :per) RETURNING id')
+                sql = ('INSERT INTO tbl_personal_expense (user_id, amount, "date", notes, category_id, person_id, account_id) '
+                       'VALUES (:uid, :amount, :date, :notes, :cat, :per, :acct) RETURNING id')
                 p = {**p, "uid": scope.user_id}
             ids.append(session.execute(text(sql), p).scalar())
         session.commit()
@@ -314,6 +336,8 @@ def update_expense(session: Session, expense_id: int, data: dict, scope: Scope =
         sets.append("category_id = :cat"); params["cat"] = _category(session, data["category_id"])["id"]
     if data.get("person_id") is not None:
         sets.append("person_id = :per"); params["per"] = _person(session, data["person_id"])["id"]
+    if "account_id" in data and scope.user_id is not None:               # present and None = take it off its account
+        sets.append("account_id = :acct"); params["acct"] = _check_account(session, scope, data["account_id"])
     if sets:
         session.execute(text(f"UPDATE {scope.table} SET " + ", ".join(sets) + " WHERE id = :i"), params)
         session.commit()

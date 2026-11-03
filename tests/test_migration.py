@@ -92,7 +92,26 @@ def test_upgrade_downgrade_upgrade_cycle(fresh_db):
     assert r.returncode == 0, r.stdout + r.stderr
     assert _objects(cur) == (2, 2, 5, 6)
     r = _alembic("current")
-    assert "022_personal_budget" in (r.stdout + r.stderr)
+    assert "023_personal_accounts" in (r.stdout + r.stderr)
+    # 023: expense accounts + funds, 'paid from' on personal expenses, the rollover start month on budgets
+    cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name IN ('tbl_personal_account', 'tbl_personal_account_entry')")
+    assert cur.fetchone()[0] == 2
+    cur.execute("SELECT count(*) FROM information_schema.columns WHERE (table_name, column_name) IN (('tbl_personal_expense', 'account_id'), ('tbl_personal_budget', 'start_month'))")
+    assert cur.fetchone()[0] == 2
+    cur.execute("INSERT INTO tbl_personal_account (user_id, name, opening_balance, opening_date) VALUES (1, 'Wallet', 100, '2026-11-01')")
+    with pytest.raises(psycopg2.errors.UniqueViolation):                                   # one name per person, ignoring case
+        cur.execute("INSERT INTO tbl_personal_account (user_id, name, opening_balance, opening_date) VALUES (1, 'WALLET', 5, '2026-11-01')")
+    cur.execute("INSERT INTO tbl_personal_budget (user_id, category_id, amount) VALUES (1, 7, 100) RETURNING start_month")
+    assert cur.fetchone()[0] == date.today().replace(day=1)                                # a budget with no start month begins this month
+    r = _alembic("downgrade", "022_personal_budget")
+    assert r.returncode == 0, r.stdout + r.stderr
+    cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name IN ('tbl_personal_account', 'tbl_personal_account_entry')")
+    assert cur.fetchone()[0] == 0
+    cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = 'tbl_personal_budget'")
+    assert cur.fetchone()[0] == 1                                                          # the budgets themselves are untouched
+    r = _alembic("upgrade", "head")
+    assert r.returncode == 0, r.stdout + r.stderr
+    # 022:
     # 022: Personal Finance monthly budget; one row per user and category, a downgrade removes only that table
     cur.execute("INSERT INTO tbl_personal_budget (user_id, category_id, amount) VALUES (1, 5, 3000)")
     with pytest.raises(psycopg2.errors.UniqueViolation):

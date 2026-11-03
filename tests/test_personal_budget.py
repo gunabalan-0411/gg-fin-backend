@@ -205,3 +205,101 @@ def test_login_is_required(client):                                             
     app.dependency_overrides.pop(get_current_user, None)
     assert client.get(f"{P}/budgets").status_code in (401, 403)
     assert client.put(f"{P}/budgets/1", json={"amount": 5}).status_code in (401, 403)
+
+
+# ── carrying forward what is left over (or overspent) into the next month ─────────────────────────────────────
+def began(category_id, month="2026-08-01", user_id=1):
+    """Pretend the budget was first set in `month` (it is set today)."""
+    with engine.begin() as c:
+        c.execute(text("UPDATE tbl_personal_budget SET start_month = :m WHERE category_id = :c AND user_id = :u"), {"m": month, "c": category_id, "u": user_id})
+
+
+def test_what_is_left_over_in_a_month_is_added_to_the_next_months_available_amount(client):      # PBG-15
+    food = category(client, "Food")
+    set_budget(client, food, 5000)
+    began(food, "2026-08-01")
+    spend(client, 4000, food, date(2026, 8, 12))                                                  # 1,000 left in August
+    spend(client, 6000, food, date(2026, 9, 3))                                                   # 5,000 + 1,000 - 6,000 = 0 left in September
+    spend(client, 1500, food, date(2026, 10, 9))
+    aug, sep, octo, nov = (row(view(client, m), "Food") for m in ("2026-08", "2026-09", "2026-10", "2026-11"))
+    assert (float(aug["carried_in"]), float(aug["available"]), float(aug["left"])) == (0, 5000, 1000)     # the first month has nothing carried in
+    assert (float(sep["carried_in"]), float(sep["available"]), float(sep["left"])) == (1000, 6000, 0)
+    assert (float(octo["carried_in"]), float(octo["available"]), float(octo["left"])) == (0, 5000, 3500)
+    assert (float(nov["carried_in"]), float(nov["available"]), float(nov["left"])) == (3500, 8500, 8500)  # nothing spent yet in November
+    assert float(nov["budget"]) == 5000                                                           # the amount itself stays the same
+
+
+def test_overspending_is_carried_forward_too_and_reduces_the_next_month(client):                # PBG-16
+    food = category(client, "Food")
+    set_budget(client, food, 5000)
+    began(food, "2026-10-01")
+    spend(client, 9000, food, date(2026, 10, 5))
+    octo, nov = row(view(client, "2026-10"), "Food"), row(view(client, "2026-11"), "Food")
+    assert octo["over"] is True and float(octo["left"]) == -4000
+    assert float(nov["carried_in"]) == -4000 and float(nov["available"]) == 1000
+    spend(client, 1500, food, date(2026, 11, 2))
+    nov = row(view(client, "2026-11"), "Food")
+    assert nov["over"] is True and float(nov["left"]) == -500                                      # over against what is really available
+
+
+def test_a_month_before_the_budget_began_carries_nothing(client):                                # PBG-17
+    food = category(client, "Food")
+    set_budget(client, food, 5000)
+    began(food, "2026-09-01")
+    spend(client, 100, food, date(2026, 7, 5))
+    jul = row(view(client, "2026-07"), "Food")
+    assert float(jul["carried_in"]) == 0 and float(jul["available"]) == 5000
+    assert float(row(view(client, "2026-09"), "Food")["carried_in"]) == 0                          # the month it began
+
+
+def test_sub_category_spending_counts_in_the_carry_and_other_categories_do_not(client):          # PBG-18
+    food, fun = category(client, "Food"), category(client, "Fun")
+    fish = category(client, "Fish", food)
+    set_budget(client, food, 1000)
+    began(food, "2026-09-01")
+    spend(client, 300, fish, date(2026, 9, 4))
+    spend(client, 200, food, date(2026, 9, 5))
+    spend(client, 900, fun, date(2026, 9, 6))
+    assert float(row(view(client, "2026-10"), "Food")["carried_in"]) == 500
+
+
+def test_taking_a_budget_off_and_setting_it_again_starts_the_carry_afresh(client):               # PBG-19
+    food = category(client, "Food")
+    set_budget(client, food, 5000)
+    began(food, "2026-08-01")
+    assert float(row(view(client, "2026-11"), "Food")["carried_in"]) == 15000                      # three untouched months
+    set_budget(client, food, 0)
+    set_budget(client, food, 5000)
+    assert float(row(view(client, "2026-11"), "Food")["carried_in"]) == 0                          # begun again this month
+    set_budget(client, food, 6000)                                                                 # changing the amount does not reset it
+    with engine.begin() as c:
+        assert c.execute(text("SELECT start_month FROM tbl_personal_budget WHERE category_id = :c"), {"c": food}).scalar() == date.today().replace(day=1)
+
+
+def test_the_totals_include_the_carry_and_the_dashboard_uses_what_is_available(client):          # PBG-20
+    food, travel = category(client, "Food"), category(client, "Travel")
+    set_budget(client, food, 5000)
+    set_budget(client, travel, 1000)
+    began(food, "2026-10-01")
+    began(travel, "2026-10-01")
+    spend(client, 3000, food, date(2026, 10, 7))                                                   # +2,000 into November
+    spend(client, 1400, travel, date(2026, 10, 8))                                                 # -400 into November
+    spend(client, 600, food, date(2026, 11, 1))
+    v = view(client, "2026-11")
+    assert float(v["total_budget"]) == 6000 and float(v["total_carried_in"]) == 1600 and float(v["total_available"]) == 7600
+    assert float(v["spent_on_budgeted"]) == 600 and float(v["left"]) == 7000
+    b = client.get(f"{P}/dashboard").json()["budget"]
+    assert float(b["total_available"]) == float(view(client)["total_available"])
+
+
+def test_the_carry_is_each_persons_own(client):                                                  # PBG-21
+    food = category(client, "Food")
+    set_budget(client, food, 5000)
+    began(food, "2026-09-01")
+    as_user(2)
+    assert row(view(client, "2026-11"), "Food")["carried_in"] is None                              # nothing budgeted by this person
+    set_budget(client, food, 100)
+    began(food, "2026-10-01", user_id=2)
+    assert float(row(view(client, "2026-11"), "Food")["carried_in"]) == 100
+    as_user(1)
+    assert float(row(view(client, "2026-11"), "Food")["carried_in"]) == 10000

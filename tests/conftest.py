@@ -33,7 +33,7 @@ DATA_TABLES = [
     "tbl_edi_transactions", "tbl_iop_transactions",
     "tbl_upi_transactions", "tbl_upi_vpa_mappings", "tbl_drive_settings", "tbl_unclaimed_balance", "tbl_defaulted_balance",
     "tbl_note_page", "tbl_debt", "tbl_debt_repayment",
-    "tbl_expense", "tbl_expense_category", "tbl_expense_person", "tbl_personal_expense", "tbl_personal_saving", "tbl_personal_lend", "tbl_personal_gift", "tbl_personal_borrow", "tbl_personal_investment", "tbl_personal_budget",
+    "tbl_expense", "tbl_expense_category", "tbl_expense_person", "tbl_personal_expense", "tbl_personal_saving", "tbl_personal_lend", "tbl_personal_gift", "tbl_personal_borrow", "tbl_personal_investment", "tbl_personal_budget", "tbl_personal_account", "tbl_personal_account_entry",
 ]
 
 
