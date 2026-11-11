@@ -10,6 +10,13 @@ from app.schemas.transaction import (
 )
 
 
+BULK_DELETE_MISMATCH = "Some of those transactions do not belong to this customer or were already deleted. Nothing was deleted."
+
+
+class BulkDeleteError(Exception):
+    """A bulk delete named a transaction that is not the customer's (or is gone): refused as a whole."""
+
+
 def _sync_edi_balance(session: Session, customer_id: int) -> None:
     from app.models.customer import EdiCustomer
     from app.models.transaction import EdiTransaction
@@ -65,6 +72,23 @@ class EdiTransactionService:
         self.session.commit()
         return True
 
+    def delete_many(self, customer_id: int, ids: list[int]) -> int:
+        """Delete several of ONE customer's transactions together (all or nothing), then re-sync the balance once. Returns how many were deleted;
+        raises BulkDeleteError (nothing deleted) when an id is not this customer's (or is already gone)."""
+        from app.models.transaction import EdiTransaction
+        wanted = set(ids)
+        found = self.session.exec(
+            select(EdiTransaction).where(EdiTransaction.customer_id == customer_id, EdiTransaction.transaction_id.in_(wanted))
+        ).all()
+        if len(found) != len(wanted):
+            raise BulkDeleteError(BULK_DELETE_MISMATCH)
+        for t in found:
+            self.session.delete(t)
+        self.session.flush()
+        _sync_edi_balance(self.session, customer_id)
+        self.session.commit()
+        return len(found)
+
     def upsert(self, customer_id: int, collection_date: date, amount: float, payment_mode: str = "CASH", is_paid: bool = True):
         status = "PAID" if is_paid else "UNPAID"
         existing = self.repo.get_by_customer_date_and_mode(customer_id, collection_date, payment_mode)
@@ -119,6 +143,23 @@ class IopTransactionService:
             iop_split_service.apply_delta(self.session, txn.customer_id, -Decimal(str(txn.principal_amount)))   # its principal goes with it
         self.repo.delete(txn)
         return True
+
+    def delete_many(self, customer_id: int, ids: list[int]) -> int:
+        """Delete several of ONE customer's collections together (all or nothing). The principal they had added goes back off the customer
+        (principal_paid and the balance move once, by the total). Raises BulkDeleteError (nothing deleted) when an id is not this customer's."""
+        from app.models.transaction import IopTransaction
+        wanted = set(ids)
+        found = self.session.exec(
+            select(IopTransaction).where(IopTransaction.customer_id == customer_id, IopTransaction.transaction_id.in_(wanted))
+        ).all()
+        if len(found) != len(wanted):
+            raise BulkDeleteError(BULK_DELETE_MISMATCH)
+        principal = sum((Decimal(str(t.principal_amount or 0)) for t in found), Decimal(0))
+        iop_split_service.apply_delta(self.session, customer_id, -principal)
+        for t in found:
+            self.session.delete(t)
+        self.session.commit()
+        return len(found)
 
     def upsert(self, customer_id: int, collection_date: date, amount: float, payment_mode: str = "CASH", is_paid: bool = True,
                principal: Decimal | float | int = 0):

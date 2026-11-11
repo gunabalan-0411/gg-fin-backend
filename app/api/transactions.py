@@ -1,6 +1,7 @@
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from app.api.deps import get_current_user
@@ -9,9 +10,15 @@ from app.schemas.transaction import (
     EdiTransactionCreate, EdiTransactionRead, EdiTransactionUpdate,
     IopTransactionCreate, IopTransactionRead, IopTransactionUpdate,
 )
-from app.services.transaction_service import EdiTransactionService, IopTransactionService
+from app.services.transaction_service import BulkDeleteError, EdiTransactionService, IopTransactionService
 
 router = APIRouter()
+
+
+class BulkDeleteBody(BaseModel):
+    """The transactions of ONE customer to delete together (the customer's transaction list: select rows, Delete selected)."""
+    customer_id: int
+    ids: list[int] = Field(min_length=1, max_length=2000)
 
 
 # ── EDI ────────────────────────────────────────────────────────────────────
@@ -96,3 +103,20 @@ def delete_iop(
 ):
     if not IopTransactionService(session).delete(transaction_id):
         raise HTTPException(status_code=404, detail="Transaction not found")
+
+
+# ── Bulk delete (a customer's transaction list: select rows -> Delete selected) ────────────────────────
+@router.post("/edi/bulk-delete")
+def bulk_delete_edi(body: BulkDeleteBody, session: Session = Depends(get_session), _=Depends(get_current_user)):
+    try:
+        return {"deleted": EdiTransactionService(session).delete_many(body.customer_id, body.ids)}
+    except BulkDeleteError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/iop/bulk-delete")
+def bulk_delete_iop(body: BulkDeleteBody, session: Session = Depends(get_session), _=Depends(get_current_user)):
+    try:
+        return {"deleted": IopTransactionService(session).delete_many(body.customer_id, body.ids)}
+    except BulkDeleteError as e:
+        raise HTTPException(status_code=400, detail=str(e))
