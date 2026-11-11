@@ -15,6 +15,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.models.customer import EdiCustomer, IopCustomer
@@ -255,10 +256,15 @@ def customer_detail(session: Session, product: str, customer_id: int) -> Optiona
 
 
 # ── The collections page (வசூல்) ─────────────────────────────────────────────────────────────────────────────
+# It mirrors two dashboard reports, so the TV and the website always agree:
+#   EL  = "Reminder report - IOP Interest Due": who is due Yesterday / Today / Tomorrow (the same payment-date rule,
+#         dashboard_service._payment_dates_in_range), the loan, and the interest of ONE collection (the customer's `interest`).
+#   தவணை = "Defaulter report - EDI 95+ days overdue": days since the last PAID payment (the loan start date when nothing was ever paid).
 
 IST = timezone(timedelta(hours=5, minutes=30))
-EDI_LONG_DAYS = 99                      # a தவணை loan this many days (or more) after its start date is listed
-EL_FREQUENCIES = {10: "ten_days", 30: "monthly"}
+EDI_OVERDUE_DAYS = 95                   # the Defaulter report's own threshold (DashboardService.get_edi_defaulters)
+MONTHLY_FROM = 30                       # interest collected every 30 days (or more) = "maadha vatti"; shorter (10 days ...) goes in the upper card
+DAY_KEYS = (("yesterday", -1), ("today", 0), ("tomorrow", 1))
 
 
 def today_ist() -> date:
@@ -272,11 +278,14 @@ def _name_pair(c, nm) -> tuple[str, str]:
 
 
 def collections(session: Session, today: Optional[date] = None) -> dict:
-    """What the TV's collections page shows (read-only, active customers only, `ignore`d ones left out).
+    """What the TV's collections page shows (read-only; active customers; `ignore`d ones left out, as both reports do by default).
 
-    EL (IOP), split by how often interest is collected: every 10 days / monthly (30 days). Per person: the loan, the interest due for ONE
-    collection (monthly interest x frequency / 30) and the interest paid so far this month (PAID rows of the current month; principal excluded).
-    தவணை (EDI): loans whose start date is 99 or more days ago - start date, loan, balance, days since the start. Aadhaar / remarks never leave."""
+    el[yesterday | today | tomorrow] = {date, ten_days: [...], monthly: [...]}: the customers due that day, split by how often interest is collected
+    (every 30+ days -> monthly, shorter -> ten_days). Per person: loan, `due` = the interest of one collection, `paid_month` = interest PAID so far
+    this month (principal excluded), phone.
+    edi_long = தவணை loans 95+ days overdue (longest first): last payment date, loan, balance, phone, days overdue. Aadhaar / remarks never leave."""
+    from app.services.dashboard_service import _payment_dates_in_range      # the very rule the Reminder report uses
+
     today = today or today_ist()
     month_start = today.replace(day=1)
 
@@ -288,36 +297,43 @@ def collections(session: Session, today: Optional[date] = None) -> dict:
         if (t.payment_status or "").upper() == "PAID":
             paid[t.customer_id] = paid.get(t.customer_id, Decimal(0)) + Decimal(str(t.amount or 0))
 
-    groups: dict[str, list[dict]] = {"ten_days": [], "monthly": []}
+    el: dict[str, dict] = {key: {"date": (today + timedelta(days=off)).isoformat(), "ten_days": [], "monthly": []} for key, off in DAY_KEYS}
     for c in session.exec(
         select(IopCustomer).where(IopCustomer.is_closed == False, IopCustomer.ignore == False).order_by(IopCustomer.customer_id)  # noqa: E712
     ).all():
-        freq = int(round(float(c.interest_payment_frequency))) if c.interest_payment_frequency is not None else 0
-        key = EL_FREQUENCIES.get(freq)
-        if not key:
+        if not c.loan_start_date:
             continue
+        freq = float(c.interest_payment_frequency or 1)                     # a missing frequency counts as 1, like the report
         en, ta = _name_pair(c, el_names.get(c.customer_id))
-        groups[key].append({
+        row = {
             "customer_id": c.customer_id, "name_en": en, "name_ta": ta,
-            "loan_amount": _num(c.loan_amount),
-            "due": round(_num(c.interest) * freq / 30, 2),
-            "paid_month": float(paid.get(c.customer_id, Decimal(0))),
-            "phone": c.contact_number or "",
-        })
+            "loan_amount": _num(c.loan_amount), "due": _num(c.interest), "paid_month": float(paid.get(c.customer_id, Decimal(0))),
+            "phone": c.contact_number or "", "frequency": round(freq),
+        }
+        for key, off in DAY_KEYS:
+            d = today + timedelta(days=off)
+            if _payment_dates_in_range(c.loan_start_date, freq, d, d):
+                el[key]["monthly" if round(freq) >= MONTHLY_FROM else "ten_days"].append(row)
 
     edi_names = {m.customer_id: m for m in session.exec(select(EdiNameMap)).all()}
-    long_loans: list[dict] = []
-    for c in session.exec(
-        select(EdiCustomer).where(EdiCustomer.is_closed == False, EdiCustomer.ignore == False, EdiCustomer.loan_start_date != None)  # noqa: E711,E712
+    last_paid: dict[int, date] = {}
+    for cid, last in session.exec(
+        select(EdiTransaction.customer_id, func.max(EdiTransaction.collection_date)).where(EdiTransaction.payment_status == "PAID").group_by(EdiTransaction.customer_id)
     ).all():
-        days = (today - c.loan_start_date).days
-        if days < EDI_LONG_DAYS:
+        last_paid[cid] = last
+    long_loans: list[dict] = []
+    for c in session.exec(select(EdiCustomer).where(EdiCustomer.is_closed == False, EdiCustomer.ignore == False)).all():  # noqa: E712
+        since = last_paid.get(c.customer_id) or c.loan_start_date or today      # the report: last paid, else the start date
+        days = (today - since).days
+        if days < EDI_OVERDUE_DAYS:
             continue
         en, ta = _name_pair(c, edi_names.get(c.customer_id))
+        lp = last_paid.get(c.customer_id)
         long_loans.append({
-            "customer_id": c.customer_id, "name_en": en, "name_ta": ta, "loan_start_date": c.loan_start_date.isoformat(),
+            "customer_id": c.customer_id, "name_en": en, "name_ta": ta,
+            "last_payment_date": lp.isoformat() if lp else None, "loan_start_date": c.loan_start_date.isoformat() if c.loan_start_date else None,
             "loan_amount": _num(c.loan_amount), "balance": _num(c.outstanding_balance), "phone": c.contact_number or "", "days": days,
         })
     long_loans.sort(key=lambda r: (-r["days"], r["customer_id"]))
 
-    return {"as_of": today.isoformat(), "el_ten_days": groups["ten_days"], "el_monthly": groups["monthly"], "edi_long": long_loans}
+    return {"as_of": today.isoformat(), "el": el, "edi_long": long_loans}
