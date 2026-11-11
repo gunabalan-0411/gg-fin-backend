@@ -10,7 +10,7 @@ from app.schemas.customer import (
     EdiCustomerCreate, EdiCustomerRead, EdiCustomerUpdate,
     IopCustomerCreate, IopCustomerRead, IopCustomerUpdate,
 )
-from app.services.customer_service import EdiCustomerService, IopCustomerService
+from app.services.customer_service import EdiCustomerService, IopCustomerService, NewAccountWouldCloseError
 from app.services.transaction_service import EdiTransactionService, IopTransactionService
 from app.models.mapping import EdiGroupMap, IopGroupMap
 
@@ -68,7 +68,10 @@ def create_edi(
     session: Session = Depends(get_session),
     _=Depends(get_current_user),
 ):
-    return EdiCustomerService(session).create(payload)
+    try:
+        return EdiCustomerService(session).create(payload)
+    except NewAccountWouldCloseError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 @router.patch("/edi/{customer_id}", response_model=EdiCustomerRead)
@@ -151,7 +154,10 @@ def create_iop(
     session: Session = Depends(get_session),
     _=Depends(get_current_user),
 ):
-    return IopCustomerService(session).create(payload)
+    try:
+        return IopCustomerService(session).create(payload)
+    except NewAccountWouldCloseError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 @router.patch("/iop/{customer_id}", response_model=IopCustomerRead)

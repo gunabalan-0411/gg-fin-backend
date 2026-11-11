@@ -11,6 +11,7 @@ from app.models.customer_mapping import CustomerAlias, CustomerAiMismatch
 from app.models.backup import BackupSettings
 from app.models.upi import UpiTransaction, GmailSettings, UpiVpaMapping, DriveSettings
 from app.models.note import NotePage
+from app.models.tv import TvDevice, TvPairing
 
 __all__ = [
     "User",
@@ -27,4 +28,5 @@ __all__ = [
     "BackupSettings",
     "UpiTransaction", "GmailSettings", "UpiVpaMapping", "DriveSettings",
     "NotePage",
+    "TvDevice", "TvPairing",
 ]

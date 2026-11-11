@@ -10,6 +10,17 @@ from app.schemas.customer import (
 )
 
 
+class NewAccountWouldCloseError(ValueError):
+    """A NEW account was asked to be open, but its figures say nothing is left to pay - it would be created already closed
+    (and, for a re-loan copy, take the old account's negative / zero balance with it). Refused with a clear message instead."""
+
+
+EDI_WOULD_CLOSE = ("The balance to pay on this new account is zero or less, so it would be created already closed. "
+                   "Enter the new loan's balance, or switch 'Account Closed' on.")
+IOP_WOULD_CLOSE = ("Principal paid is not less than the loan amount, so this new account would be created already closed. "
+                   "Enter the new loan's figures, or switch 'Account Closed' on.")
+
+
 class EdiCustomerService:
     def __init__(self, session: Session):
         self.session = session
@@ -33,7 +44,12 @@ class EdiCustomerService:
         # Set initial outstanding_balance = loan_amount (no transactions yet)
         if data.get("loan_amount") is not None and data.get("outstanding_balance") is None:
             data["outstanding_balance"] = data["loan_amount"]
-        data["is_closed"] = Decimal(str(data.get("outstanding_balance") or 0)) <= 0
+        closed_by_balance = Decimal(str(data.get("outstanding_balance") or 0)) <= 0
+        # An account explicitly asked to be OPEN with a loan but nothing left to pay (e.g. a re-loan copy that kept the old,
+        # overpaid account's negative balance) must not silently become a closed one that vanishes from the active list.
+        if payload.is_closed is False and closed_by_balance and Decimal(str(data.get("loan_amount") or 0)) > 0:
+            raise NewAccountWouldCloseError(EDI_WOULD_CLOSE)
+        data["is_closed"] = True if payload.is_closed else closed_by_balance
         return self.repo.create(data)
 
     def update(self, customer_id: int, payload: EdiCustomerUpdate):
@@ -94,8 +110,10 @@ class IopCustomerService:
     def create(self, payload: IopCustomerCreate):
         data = payload.model_dump()
         balance, closed = self._iop_balance(data.get("loan_amount"), data.get("principal_paid"))
+        if payload.is_closed is False and closed and Decimal(str(data.get("loan_amount") or 0)) > 0:
+            raise NewAccountWouldCloseError(IOP_WOULD_CLOSE)           # same rule as EDI: never silently create a closed "new" account
         data["outstanding_balance"] = balance
-        data["is_closed"] = closed
+        data["is_closed"] = True if payload.is_closed else closed
         return self.repo.create(data)
 
     def update(self, customer_id: int, payload: IopCustomerUpdate):

@@ -92,7 +92,21 @@ def test_upgrade_downgrade_upgrade_cycle(fresh_db):
     assert r.returncode == 0, r.stdout + r.stderr
     assert _objects(cur) == (2, 2, 5, 6)
     r = _alembic("current")
-    assert "023_personal_accounts" in (r.stdout + r.stderr)
+    assert "024_tv_devices" in (r.stdout + r.stderr)
+    # 024: TV devices + pairing codes; a downgrade removes only those two tables
+    cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name IN ('tbl_tv_device', 'tbl_tv_pairing')")
+    assert cur.fetchone()[0] == 2
+    cur.execute("INSERT INTO tbl_tv_device (user_id, name, token_hash) VALUES (1, 'Living room', 'h1')")
+    with pytest.raises(psycopg2.errors.UniqueViolation):                                   # a token hash is unique
+        cur.execute("INSERT INTO tbl_tv_device (user_id, name, token_hash) VALUES (1, 'Other', 'h1')")
+    r = _alembic("downgrade", "023_personal_accounts")
+    assert r.returncode == 0, r.stdout + r.stderr
+    cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name IN ('tbl_tv_device', 'tbl_tv_pairing')")
+    assert cur.fetchone()[0] == 0
+    cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = 'tbl_personal_account'")
+    assert cur.fetchone()[0] == 1                                                          # nothing else is touched
+    r = _alembic("upgrade", "head")
+    assert r.returncode == 0, r.stdout + r.stderr
     # 023: expense accounts + funds, 'paid from' on personal expenses, the rollover start month on budgets
     cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name IN ('tbl_personal_account', 'tbl_personal_account_entry')")
     assert cur.fetchone()[0] == 2
