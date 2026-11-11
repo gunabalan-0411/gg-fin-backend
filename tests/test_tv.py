@@ -435,3 +435,106 @@ def test_tv44_phone_search_respects_the_product_too(tv, people, conn):
     assert names(tv, token, "99440") == ["Murugan S", "Gopal Samy"] or set(names(tv, token, "99440")) == {"Murugan S", "Gopal Samy"}
     r = tv.get(f"{API}/search", params={"q": "99440", "product": "iop"}, headers=H(token)).json()["results"]
     assert [x["name_en"] for x in r] == ["Gopal Samy"]
+
+
+# ── Collections page (வசூல்) ─────────────────────────────────────────────────────────────────────────────
+
+TODAY = date(2026, 11, 11)
+
+
+@pytest.fixture()
+def coll(conn, monkeypatch):
+    from app.services import tv_service
+    monkeypatch.setattr(tv_service, "today_ist", lambda: TODAY)
+    for cid, name, freq, interest in [(1, "Ten Day A", 10, 3000), (2, "Ten Day B", 10, 1500), (3, "Monthly A", 30, 9000),
+                                      (4, "Fifteen", 15, 4000), (5, "No Freq", None, 4000), (6, "Closed Ten", 10, 3000), (7, "Ignored Ten", 10, 3000)]:
+        add_customer(conn, "IOP", cid, name, closed=(cid == 6))
+        conn.execute(text("UPDATE tbl_iop_customer SET interest_payment_frequency=:f, interest=:i, loan_amount=100000, contact_number='98765 43210', "
+                          "loan_start_date='2026-01-05', ignore=:ig WHERE customer_id=:c"), {"f": freq, "i": interest, "c": cid, "ig": cid == 7})
+    conn.execute(text("UPDATE tbl_iop_name_map SET customer_name_ta='பத்து' WHERE customer_id=1"))
+    return conn
+
+
+def get_coll(tv, token):
+    r = tv.get(f"{API}/collections", headers=H(token))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_tv45_collections_need_the_token(tv, coll):
+    assert tv.get(f"{API}/collections").status_code == 401
+    assert tv.get(f"{API}/collections", headers=H("ggtv_nope")).status_code == 401
+
+
+def test_tv46_el_is_split_by_how_often_interest_is_collected(tv, coll):
+    d = get_coll(tv, pair(tv))
+    assert [r["customer_id"] for r in d["el_ten_days"]] == [1, 2]            # every 10 days
+    assert [r["customer_id"] for r in d["el_monthly"]] == [3]                 # 30 days
+    listed = {r["customer_id"] for r in d["el_ten_days"] + d["el_monthly"]}
+    assert not listed & {4, 5, 6, 7}                                          # other frequency, none, closed, ignored: not listed
+    assert d["as_of"] == "2026-11-11"
+
+
+def test_tv47_amount_due_is_one_collection_of_the_monthly_interest(tv, coll):
+    d = get_coll(tv, pair(tv))
+    by = {r["customer_id"]: r for r in d["el_ten_days"] + d["el_monthly"]}
+    assert by[1]["due"] == 1000 and by[2]["due"] == 500                       # 10-day: a third of the month
+    assert by[3]["due"] == 9000                                               # monthly: the whole month
+    assert by[1]["loan_amount"] == 100000 and by[1]["phone"] == "98765 43210"
+
+
+def test_tv48_paid_this_month_counts_only_paid_interest_of_this_month(tv, coll):
+    txn(coll, "IOP", 1, date(2026, 11, 1), 1000)
+    txn(coll, "IOP", 1, date(2026, 11, 10), 1000, status="UNPAID")            # not received
+    txn(coll, "IOP", 1, date(2026, 10, 31), 1000)                             # last month
+    txn(coll, "IOP", 1, date(2026, 11, 5), 500, principal=20000)              # interest 500 + principal: only the interest counts
+    txn(coll, "IOP", 1, date(2026, 11, 20), 700)                              # in the future of "today": not yet
+    d = get_coll(tv, pair(tv))
+    one = next(r for r in d["el_ten_days"] if r["customer_id"] == 1)
+    assert one["paid_month"] == 1500
+    assert next(r for r in d["el_ten_days"] if r["customer_id"] == 2)["paid_month"] == 0
+
+
+def test_tv49_names_tamil_with_english_fallback(tv, coll):
+    d = get_coll(tv, pair(tv))
+    one = next(r for r in d["el_ten_days"] if r["customer_id"] == 1)
+    assert one["name_ta"] == "பத்து" and one["name_en"] == "Ten Day A"
+    two = next(r for r in d["el_ten_days"] if r["customer_id"] == 2)
+    assert two["name_ta"] == "" and two["name_en"] == "Ten Day B"            # the page shows the English name when there is no Tamil one
+
+
+@pytest.fixture()
+def edi_long(conn, monkeypatch):
+    from app.services import tv_service
+    monkeypatch.setattr(tv_service, "today_ist", lambda: TODAY)
+    rows = [(10, "Exactly 99", TODAY - timedelta(days=99), False, False), (11, "Day 98", TODAY - timedelta(days=98), False, False),
+            (12, "Old one", TODAY - timedelta(days=140), False, False), (13, "Closed old", TODAY - timedelta(days=200), True, False),
+            (14, "Ignored old", TODAY - timedelta(days=200), False, True), (15, "No start", None, False, False)]
+    for cid, name, start, closed, ignore in rows:
+        add_customer(conn, "EDI", cid, name, closed=closed)
+        conn.execute(text("UPDATE tbl_edi_customer SET loan_start_date=:s, loan_amount=25000, outstanding_balance=11800, contact_number='99440 11223', "
+                          "proof_aadhaar='123412341234', remarks='secret', ignore=:ig WHERE customer_id=:c"), {"s": start, "c": cid, "ig": ignore})
+    return conn
+
+
+def test_tv50_thavanai_lists_loans_99_days_or_older_longest_first(tv, edi_long):
+    d = get_coll(tv, pair(tv))
+    assert [r["customer_id"] for r in d["edi_long"]] == [12, 10]              # 140 days, then exactly 99; day 98, closed, ignored, no date: out
+    first = d["edi_long"][0]
+    assert first["days"] == 140 and first["loan_start_date"] == (TODAY - timedelta(days=140)).isoformat()
+    assert first["loan_amount"] == 25000 and first["balance"] == 11800 and first["phone"] == "99440 11223"
+    assert d["edi_long"][1]["days"] == 99
+
+
+def test_tv51_nothing_private_leaves_and_it_is_read_only(tv, edi_long, coll):
+    token = pair(tv)
+    body = tv.get(f"{API}/collections", headers=H(token)).text
+    assert "123412341234" not in body and "secret" not in body and "aadhaar" not in body.lower() and "remarks" not in body.lower()
+    assert tv.post(f"{API}/collections", headers=H(token), json={}).status_code == 405
+
+
+def test_tv52_an_empty_database_gives_empty_lists(tv, conn, monkeypatch):
+    from app.services import tv_service
+    monkeypatch.setattr(tv_service, "today_ist", lambda: TODAY)
+    d = get_coll(tv, pair(tv))
+    assert d["el_ten_days"] == [] and d["el_monthly"] == [] and d["edi_long"] == []

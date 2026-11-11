@@ -11,7 +11,7 @@ Only SHA-256 hashes of the poll secret and of the device token are stored. A tok
 import hashlib
 import re
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -252,3 +252,72 @@ def customer_detail(session: Session, product: str, customer_id: int) -> Optiona
     else:
         out["principal_paid"] = _num(c.principal_paid)
     return out
+
+
+# ── The collections page (வசூல்) ─────────────────────────────────────────────────────────────────────────────
+
+IST = timezone(timedelta(hours=5, minutes=30))
+EDI_LONG_DAYS = 99                      # a தவணை loan this many days (or more) after its start date is listed
+EL_FREQUENCIES = {10: "ten_days", 30: "monthly"}
+
+
+def today_ist() -> date:
+    return datetime.now(IST).date()
+
+
+def _name_pair(c, nm) -> tuple[str, str]:
+    en = (nm.customer_name_en if nm and nm.customer_name_en else c.customer_name) or ""
+    ta = (nm.customer_name_ta if nm and nm.customer_name_ta else c.customer_name_ta) or ""
+    return en, ta
+
+
+def collections(session: Session, today: Optional[date] = None) -> dict:
+    """What the TV's collections page shows (read-only, active customers only, `ignore`d ones left out).
+
+    EL (IOP), split by how often interest is collected: every 10 days / monthly (30 days). Per person: the loan, the interest due for ONE
+    collection (monthly interest x frequency / 30) and the interest paid so far this month (PAID rows of the current month; principal excluded).
+    தவணை (EDI): loans whose start date is 99 or more days ago - start date, loan, balance, days since the start. Aadhaar / remarks never leave."""
+    today = today or today_ist()
+    month_start = today.replace(day=1)
+
+    el_names = {m.customer_id: m for m in session.exec(select(IopNameMap)).all()}
+    paid: dict[int, Decimal] = {}
+    for t in session.exec(
+        select(IopTransaction).where(IopTransaction.collection_date >= month_start, IopTransaction.collection_date <= today)
+    ).all():
+        if (t.payment_status or "").upper() == "PAID":
+            paid[t.customer_id] = paid.get(t.customer_id, Decimal(0)) + Decimal(str(t.amount or 0))
+
+    groups: dict[str, list[dict]] = {"ten_days": [], "monthly": []}
+    for c in session.exec(
+        select(IopCustomer).where(IopCustomer.is_closed == False, IopCustomer.ignore == False).order_by(IopCustomer.customer_id)  # noqa: E712
+    ).all():
+        freq = int(round(float(c.interest_payment_frequency))) if c.interest_payment_frequency is not None else 0
+        key = EL_FREQUENCIES.get(freq)
+        if not key:
+            continue
+        en, ta = _name_pair(c, el_names.get(c.customer_id))
+        groups[key].append({
+            "customer_id": c.customer_id, "name_en": en, "name_ta": ta,
+            "loan_amount": _num(c.loan_amount),
+            "due": round(_num(c.interest) * freq / 30, 2),
+            "paid_month": float(paid.get(c.customer_id, Decimal(0))),
+            "phone": c.contact_number or "",
+        })
+
+    edi_names = {m.customer_id: m for m in session.exec(select(EdiNameMap)).all()}
+    long_loans: list[dict] = []
+    for c in session.exec(
+        select(EdiCustomer).where(EdiCustomer.is_closed == False, EdiCustomer.ignore == False, EdiCustomer.loan_start_date != None)  # noqa: E711,E712
+    ).all():
+        days = (today - c.loan_start_date).days
+        if days < EDI_LONG_DAYS:
+            continue
+        en, ta = _name_pair(c, edi_names.get(c.customer_id))
+        long_loans.append({
+            "customer_id": c.customer_id, "name_en": en, "name_ta": ta, "loan_start_date": c.loan_start_date.isoformat(),
+            "loan_amount": _num(c.loan_amount), "balance": _num(c.outstanding_balance), "phone": c.contact_number or "", "days": days,
+        })
+    long_loans.sort(key=lambda r: (-r["days"], r["customer_id"]))
+
+    return {"as_of": today.isoformat(), "el_ten_days": groups["ten_days"], "el_monthly": groups["monthly"], "edi_long": long_loans}

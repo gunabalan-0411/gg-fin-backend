@@ -3,7 +3,7 @@ Home TV (Android TV) API.
 
     public (the TV, before it is paired):   POST /pair/start, POST /pair/poll        (rate limited)
     logged-in person:                        POST /pair/approve, GET /devices, DELETE /devices/{id}
-    the paired TV (header X-TV-Token):       GET /me, GET /search, GET /customers/{edi|iop}/{id}   - read-only
+    the paired TV (header X-TV-Token):       GET /me, GET /search, GET /customers/{edi|iop}/{id}, GET /collections   - read-only
 
 The TV token is not a login: it is not a JWT, so every other route answers 401 to it.
 """
@@ -143,3 +143,8 @@ def customer(product: str, customer_id: int, session: Session = Depends(get_sess
     if not detail:
         raise HTTPException(status_code=404, detail="Customer not found")
     return detail
+
+
+@router.get("/collections")
+def collections(session: Session = Depends(get_session), _: TvDevice = Depends(get_tv_device)):
+    return tv_service.collections(session)
